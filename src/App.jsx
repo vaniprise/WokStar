@@ -1,0 +1,3173 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { Flame, ChefHat, AlertTriangle, CheckCircle, Trash2, ChevronRight, ChevronLeft, Droplets, Info, Plus, Trophy, User, RotateCcw, BookOpen, Play, Crosshair, ShoppingCart, Settings, Heart } from 'lucide-react';
+import { initializeApp, getApps } from 'firebase/app';
+import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, addDoc, onSnapshot } from 'firebase/firestore';
+
+// ==========================================
+// DIFFICULTY SCALING
+// ==========================================
+const DIFF_MULTS = {
+  EASY: { burn: 0.6, spill: 0.5, target: 0.75, name: 'EASY', color: 'text-green-400' },
+  NORMAL: { burn: 1.0, spill: 1.0, target: 1.0, name: 'NORMAL', color: 'text-yellow-400' },
+  HARD: { burn: 1.5, spill: 2.0, target: 1.5, name: 'HARD', color: 'text-red-500' }
+};
+
+// ==========================================
+// AUDIO ENGINE
+// ==========================================
+let audioCtx = null;
+let masterGain = null;
+let sfxGain = null;
+let musicGain = null;
+let compressor = null;
+
+let sizzleSource = null;
+let sizzleGain = null;
+let sizzleFilter = null;
+
+let burnerSource = null;
+let burnerGain = null;
+let burnerFilter = null;
+
+let cleanSource = null;
+let cleanGain = null;
+
+let noiseBuffer = null;
+
+let sfxVolumeLevel = 0.5;
+let musicVolumeLevel = 0.5;
+
+const setSfxVolume = (val) => {
+  sfxVolumeLevel = val;
+  if (sfxGain && audioCtx) {
+    sfxGain.gain.setTargetAtTime(val, audioCtx.currentTime, 0.1);
+  }
+};
+
+const setMusicVolume = (val) => {
+  musicVolumeLevel = val;
+  if (musicGain && audioCtx) {
+    musicGain.gain.setTargetAtTime(val, audioCtx.currentTime, 0.1);
+  }
+};
+
+const getNoiseBuffer = () => {
+  if (!audioCtx) return null;
+  if (noiseBuffer) return noiseBuffer;
+  const bufferSize = audioCtx.sampleRate * 2;
+  noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+  const data = noiseBuffer.getChannelData(0);
+  for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+  return noiseBuffer;
+};
+
+const initAudio = () => {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    
+    compressor = audioCtx.createDynamicsCompressor();
+    compressor.threshold.value = -12;
+    compressor.knee.value = 10;
+    compressor.ratio.value = 8;
+    compressor.attack.value = 0.01;
+    compressor.release.value = 0.25;
+
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = 0.8; 
+
+    sfxGain = audioCtx.createGain();
+    sfxGain.gain.value = sfxVolumeLevel;
+
+    musicGain = audioCtx.createGain();
+    musicGain.gain.value = musicVolumeLevel;
+
+    sfxGain.connect(compressor);
+    musicGain.connect(compressor);
+    compressor.connect(masterGain);
+    masterGain.connect(audioCtx.destination);
+  }
+  
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume();
+  }
+  setupSizzle();
+  setupBurner();
+  setupClean();
+};
+
+const setupSizzle = () => {
+  if (sizzleSource) return;
+  sizzleSource = audioCtx.createBufferSource();
+  sizzleSource.buffer = getNoiseBuffer();
+  sizzleSource.loop = true;
+  sizzleFilter = audioCtx.createBiquadFilter();
+  sizzleFilter.type = 'bandpass';
+  sizzleFilter.Q.value = 1.0;
+  sizzleGain = audioCtx.createGain();
+  sizzleGain.gain.value = 0;
+
+  sizzleSource.connect(sizzleFilter);
+  sizzleFilter.connect(sizzleGain);
+  sizzleGain.connect(sfxGain); 
+  sizzleSource.start();
+};
+
+const setupBurner = () => {
+  if (burnerSource) return;
+  burnerSource = audioCtx.createBufferSource();
+  burnerSource.buffer = getNoiseBuffer();
+  burnerSource.loop = true;
+  burnerFilter = audioCtx.createBiquadFilter();
+  burnerFilter.type = 'lowpass';
+  burnerFilter.frequency.value = 200;
+  burnerGain = audioCtx.createGain();
+  burnerGain.gain.value = 0;
+
+  burnerSource.connect(burnerFilter);
+  burnerFilter.connect(burnerGain);
+  burnerGain.connect(sfxGain);
+  burnerSource.start();
+};
+
+const setupClean = () => {
+  if (cleanSource) return;
+  cleanSource = audioCtx.createBufferSource();
+  cleanSource.buffer = getNoiseBuffer();
+  cleanSource.loop = true;
+  const filter = audioCtx.createBiquadFilter();
+  filter.type = 'bandpass';
+  filter.frequency.value = 1500;
+  filter.Q.value = 0.8;
+  cleanGain = audioCtx.createGain();
+  cleanGain.gain.value = 0;
+
+  const osc = audioCtx.createOscillator();
+  osc.type = 'sine';
+  osc.frequency.value = 5; 
+  const oscGain = audioCtx.createGain();
+  oscGain.gain.value = 600; 
+  osc.connect(oscGain);
+  oscGain.connect(filter.frequency);
+  osc.start();
+
+  cleanSource.connect(filter);
+  filter.connect(cleanGain);
+  cleanGain.connect(sfxGain); 
+  cleanSource.start();
+};
+
+const updateSizzle = (heatLevel, hasFood) => {
+  if (!audioCtx || !sizzleGain) return;
+  if (!hasFood || heatLevel < 5) {
+    sizzleGain.gain.setTargetAtTime(0, audioCtx.currentTime, 0.1);
+    return;
+  }
+  const targetVolume = 0.05 + (heatLevel / 100) * 0.35;
+  const targetFreq = 1000 + (heatLevel / 100) * 5000;
+  sizzleGain.gain.setTargetAtTime(targetVolume, audioCtx.currentTime, 0.1);
+  sizzleFilter.frequency.setTargetAtTime(targetFreq, audioCtx.currentTime, 0.1);
+};
+
+const updateBurner = (heatLevel, isWhoosh) => {
+  if (!audioCtx || !burnerGain) return;
+  const targetVol = (heatLevel / 100) * 0.6;
+  const targetFreq = 200 + (heatLevel / 100) * 800;
+
+  if (isWhoosh) {
+     burnerFilter.frequency.cancelScheduledValues(audioCtx.currentTime);
+     burnerFilter.frequency.setValueAtTime(burnerFilter.frequency.value, audioCtx.currentTime);
+     burnerFilter.frequency.exponentialRampToValueAtTime(targetFreq * 3.0, audioCtx.currentTime + 0.1);
+     burnerFilter.frequency.exponentialRampToValueAtTime(targetFreq, audioCtx.currentTime + 0.6);
+
+     burnerGain.gain.cancelScheduledValues(audioCtx.currentTime);
+     burnerGain.gain.setValueAtTime(burnerGain.gain.value, audioCtx.currentTime);
+     burnerGain.gain.linearRampToValueAtTime(Math.min(1.0, targetVol * 1.8), audioCtx.currentTime + 0.1);
+     burnerGain.gain.exponentialRampToValueAtTime(targetVol, audioCtx.currentTime + 0.6);
+  } else {
+     burnerGain.gain.setTargetAtTime(targetVol, audioCtx.currentTime, 0.1);
+     burnerFilter.frequency.setTargetAtTime(targetFreq, audioCtx.currentTime, 0.1);
+  }
+};
+
+const updateClean = (isCleaning) => {
+  if (!audioCtx || !cleanGain) return;
+  cleanGain.gain.setTargetAtTime(isCleaning ? 0.35 : 0, audioCtx.currentTime, 0.1);
+};
+
+const playChop = () => {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'triangle';
+  osc.connect(gain);
+  gain.connect(sfxGain);
+  
+  osc.frequency.setValueAtTime(800, audioCtx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.1);
+  gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+  
+  osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+};
+
+const playDing = (isPerfect) => {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sine';
+  osc.connect(gain);
+  gain.connect(sfxGain);
+
+  osc.frequency.setValueAtTime(isPerfect ? 880 : 587.33, audioCtx.currentTime);
+  gain.gain.setValueAtTime(isPerfect ? 0.4 : 0.25, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 1.5);
+
+  osc.start(); osc.stop(audioCtx.currentTime + 1.5);
+};
+
+const playTrash = () => {
+  if (!audioCtx) return;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'sawtooth';
+  osc.connect(gain);
+  gain.connect(sfxGain);
+
+  osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+  osc.frequency.exponentialRampToValueAtTime(40, audioCtx.currentTime + 0.3);
+  gain.gain.setValueAtTime(0.25, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.3);
+
+  osc.start(); osc.stop(audioCtx.currentTime + 0.3);
+};
+
+const playTossShhh = () => {
+  if (!audioCtx) return;
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = getNoiseBuffer();
+  const filter = audioCtx.createBiquadFilter();
+  const gain = audioCtx.createGain();
+  
+  filter.type = 'bandpass';
+  filter.frequency.setValueAtTime(2500, audioCtx.currentTime);
+  filter.Q.value = 0.5;
+  gain.gain.setValueAtTime(0, audioCtx.currentTime);
+  gain.gain.linearRampToValueAtTime(0.25, audioCtx.currentTime + 0.1);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
+
+  noise.connect(filter);
+  filter.connect(gain);
+  gain.connect(sfxGain);
+  
+  noise.start(); noise.stop(audioCtx.currentTime + 0.4);
+};
+
+const playFoodImpact = () => {
+  if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  
+  osc.type = 'sine';
+  osc.frequency.setValueAtTime(200, now);
+  osc.frequency.exponentialRampToValueAtTime(50, now + 0.05);
+  gain.gain.setValueAtTime(0.05, now);
+  gain.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
+  
+  osc.connect(gain);
+  gain.connect(sfxGain);
+  
+  osc.start(); osc.stop(now + 0.05);
+};
+
+const playIngredientAdd = (ingId) => {
+  if (!audioCtx || !sfxGain) return;
+  const now = audioCtx.currentTime;
+
+  const isWet = ['egg', 'beef', 'shrimp', 'char_siu'].includes(ingId);
+  const isLiquid = ['soy_sauce', 'oyster_sauce', 'wine', 'xo_sauce'].includes(ingId);
+  const isDry = ['scallion', 'gai_lan', 'mushroom', 'chili', 'garlic', 'ginger', 'five_spice', 'salt', 'sugar', 'msg', 'white_pepper'].includes(ingId);
+  const isHeavy = ['rice', 'noodle'].includes(ingId);
+  
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = getNoiseBuffer();
+  const filter = audioCtx.createBiquadFilter();
+  const gain = audioCtx.createGain();
+
+  noise.connect(filter);
+  filter.connect(gain);
+  gain.connect(sfxGain);
+
+  if (isWet) {
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(800, now);
+    filter.frequency.exponentialRampToValueAtTime(200, now + 0.15);
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.2, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+    noise.start(now); noise.stop(now + 0.15);
+
+    const osc = audioCtx.createOscillator();
+    const oscGain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(300, now);
+    osc.frequency.exponentialRampToValueAtTime(100, now + 0.1);
+    oscGain.gain.setValueAtTime(0.1, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+    osc.connect(oscGain);
+    oscGain.connect(sfxGain);
+    osc.start(now); osc.stop(now + 0.1);
+
+  } else if (isLiquid) {
+    filter.type = 'highpass';
+    filter.frequency.setValueAtTime(2000, now);
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.2, now + 0.05);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.25);
+    noise.start(now); noise.stop(now + 0.25);
+
+  } else if (isDry) {
+    filter.type = 'bandpass';
+    filter.frequency.setValueAtTime(4000, now);
+    filter.Q.value = 0.5;
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.15, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1);
+    noise.start(now); noise.stop(now + 0.1);
+
+  } else if (isHeavy) {
+    filter.type = 'lowpass';
+    filter.frequency.setValueAtTime(300, now);
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.25, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.2);
+    noise.start(now); noise.stop(now + 0.2);
+    
+    const osc = audioCtx.createOscillator();
+    const oscGain = audioCtx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(100, now);
+    osc.frequency.exponentialRampToValueAtTime(40, now + 0.15);
+    oscGain.gain.setValueAtTime(0.2, now);
+    oscGain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+    osc.connect(oscGain);
+    oscGain.connect(sfxGain);
+    osc.start(now); osc.stop(now + 0.15);
+
+  } else {
+    filter.type = 'highpass';
+    filter.frequency.setValueAtTime(5000, now);
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(0.1, now + 0.05);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.15);
+    noise.start(now); noise.stop(now + 0.15);
+  }
+};
+
+// ==========================================
+// GAME DATA & CONFIG
+// ==========================================
+const STORY_CHAPTERS = [
+  { target: 0, chapter: 0, title: "Chapter 1: The Fall of the Emperor", desc: "You were the arrogant 'Emperor of Eats'. But your evil apprentice framed you! Grab a rusty wok and start grinding out cheap fried rice to survive!", goal: "Earn $150 to buy a decent chef's knife.", color: "text-blue-400", border: "border-blue-900" },
+  { target: 150, chapter: 1, title: "Chapter 2: Temple Street Triads", desc: "You invent dishes so incredible the local triad bosses demand them! But now they want a hefty cut of your profits.", goal: "Earn $500 to pay off the local gangs.", color: "text-green-400", border: "border-green-900" },
+  { target: 500, chapter: 2, title: "Chapter 3: The 18 Bronze Chefs", desc: "You must master the ancient Dragon-Subduing Wok Tosses inside a giant brass bell at the Shaolin Culinary Monastery!", goal: "Earn $1,200 to graduate from Shaolin.", color: "text-yellow-400", border: "border-yellow-900" },
+  { target: 1200, chapter: 3, title: "Chapter 4: The Mega-Laser Wok", desc: "You only have your iron pan and your newfound Shaolin inner peace against Bullhorn's high-tech Mega-Laser Wok. Show them the true meaning of Wok Hei!", goal: "Earn $2,500 to expose the sabotage.", color: "text-orange-500", border: "border-orange-900" },
+  { target: 2500, chapter: 4, title: "Chapter 5: The Sorrowful Rice", desc: "Treachery! Bullhorn destroyed your premium ingredients! You must pour your soul into the legendary 'Sorrowful Rice'.", goal: "Earn $5,000 to ascend as the God of Cookery.", color: "text-red-500", border: "border-red-900" },
+  { target: 5000, chapter: 5, title: "EPILOGUE: Ascension", desc: "A divine light beams from the heavens. You are officially recognized by the celestial courts. You are the true SIK SAN!", goal: "Endless Glory.", color: "text-fuchsia-400", border: "border-fuchsia-900" }
+];
+
+const getScoreTitle = (score) => {
+  if (score >= 5000) return { title: "Sik San (God of Cookery) 食神", color: "text-fuchsia-400" };
+  if (score >= 2500) return { title: "Wok Hei Dragon 鑊氣神龍", color: "text-red-500" };
+  if (score >= 1200) return { title: "Executive Chef 行政總廚", color: "text-orange-400" };
+  if (score >= 500) return { title: "Da Ho (Line Chef) 打荷", color: "text-yellow-400" };
+  if (score >= 150) return { title: "Apprentice Cook 學徒", color: "text-green-400" };
+  return { title: "Sai Wun Gung (Wok Washer) 洗碗工", color: "text-blue-300" };
+};
+
+const ALL_ITEMS = {
+  // BASES
+  rice: { id: 'rice', name: 'Day-Old Rice', color: 'bg-yellow-50', icon: '🍚', cost: 1.50, rarity: 1 },
+  noodle: { id: 'noodle', name: 'Ho Fun', color: 'bg-orange-100', icon: '🍜', cost: 2.20, rarity: 1 },
+  // MEATS
+  egg: { id: 'egg', name: 'Beaten Egg', color: 'bg-yellow-400', icon: '🥚', cost: 1.80, rarity: 1 },
+  beef: { id: 'beef', name: 'Velvet Beef', color: 'bg-red-800', icon: '🥩', cost: 11.50, rarity: 3 },
+  char_siu: { id: 'char_siu', name: 'Char Siu', color: 'bg-red-900', icon: '🍖', text: 'text-white', cost: 85.00, rarity: 4 },
+  shrimp: { id: 'shrimp', name: 'Fresh Prawn', color: 'bg-pink-200', icon: '🦐', cost: 25.00, rarity: 3 },
+  // VEGES
+  gai_lan: { id: 'gai_lan', name: 'Gai Lan', color: 'bg-emerald-600', icon: '🥬', text: 'text-white', cost: 3.50, rarity: 2 },
+  mushroom: { id: 'mushroom', name: 'Shiitake', color: 'bg-stone-700', icon: '🍄', text: 'text-white', cost: 9.50, rarity: 2 },
+  // AROMATICS
+  scallion: { id: 'scallion', name: 'Scallions', color: 'bg-green-500', icon: '🌿', cost: 0.70, rarity: 1 },
+  garlic: { id: 'garlic', name: 'Garlic', color: 'bg-orange-50', icon: '🧄', cost: 0.50, rarity: 1 },
+  ginger: { id: 'ginger', name: 'Ginger', color: 'bg-amber-200', icon: '🫚', cost: 0.60, rarity: 1 },
+  // SPICES
+  chili: { id: 'chili', name: 'Birdseye Chili', color: 'bg-red-600', icon: '🌶️', text: 'text-white', cost: 1.20, rarity: 2 },
+  white_pepper: { id: 'white_pepper', name: 'White Pepper', color: 'bg-stone-200', icon: '🧂', text: 'text-stone-800', cost: 1.20, rarity: 1 },
+  five_spice: { id: 'five_spice', name: 'Five Spice', color: 'bg-amber-900', icon: '🌰', text: 'text-amber-100', cost: 1.50, rarity: 2 },
+  salt: { id: 'salt', name: 'Salt', color: 'bg-gray-100', icon: '🧂', text: 'text-gray-800', cost: 0.10, rarity: 1 },
+  sugar: { id: 'sugar', name: 'Sugar', color: 'bg-sky-50', icon: '🧊', text: 'text-sky-900', cost: 0.20, rarity: 1 },
+  msg: { id: 'msg', name: 'M.S.G.', color: 'bg-slate-200', icon: '✨', text: 'text-slate-800', cost: 0.80, rarity: 1 },
+  // SAUCES
+  soy_sauce: { id: 'soy_sauce', name: 'Soy Sauce', color: 'bg-stone-800', icon: '🫖', text: 'text-stone-200', cost: 0.50, rarity: 1 },
+  oyster_sauce: { id: 'oyster_sauce', name: 'Oyster Sauce', color: 'bg-amber-900', icon: '🫙', text: 'text-amber-200', cost: 1.80, rarity: 2 },
+  xo_sauce: { id: 'xo_sauce', name: 'XO Sauce', color: 'bg-orange-800', icon: '🥫', text: 'text-orange-100', cost: 45.00, rarity: 4 },
+  wine: { id: 'wine', name: 'Shaoxing Wine', color: 'bg-amber-700', icon: '🍶', text: 'text-amber-100', cost: 2.50, rarity: 2 },
+};
+
+const CATEGORIES = [
+  { id: 'BASES', name: 'Bases', items: ['rice', 'noodle'] },
+  { id: 'AROMATICS', name: 'Aromatics', items: ['scallion', 'garlic', 'ginger'] },
+  { id: 'MEATS', name: 'Meats', items: ['egg', 'beef', 'char_siu', 'shrimp'] },
+  { id: 'VEGES', name: 'Veges', items: ['gai_lan', 'mushroom'] },
+  { id: 'SPICES', name: 'Spices', items: ['salt', 'sugar', 'msg', 'white_pepper', 'five_spice', 'chili'] },
+  { id: 'SAUCES', name: 'Sauces', items: ['soy_sauce', 'oyster_sauce', 'wine', 'xo_sauce'] }
+];
+
+const FLAVOR_COMBOS = [
+  { name: "Umami Bomb", items: ['mushroom', 'oyster_sauce', 'msg'], mult: 1.5 },
+  { name: "Spicy & Numbing", items: ['chili', 'white_pepper'], mult: 1.3 },
+  { name: "Drunken Seafood", items: ['wine', 'shrimp'], mult: 1.4 },
+  { name: "Emperor's Indulgence", items: ['xo_sauce', 'beef'], mult: 1.6 },
+  { name: "Classic Wok Hei", items: ['soy_sauce', 'scallion', 'egg'], mult: 1.2 },
+  { name: "The Holy Trinity", items: ['scallion', 'garlic', 'ginger'], mult: 1.4 },
+  { name: "Five Spice Magic", items: ['five_spice', 'char_siu'], mult: 1.4 }
+];
+
+const RECIPES = [
+  { id: 'spicy_beef_rice', chapter: 0, dishType: 'bowl', displayIcons: ['🍚', '🌶️'], name: 'Spicy Beef Fried Rice', requires: ['beef', 'rice', 'egg', 'chili', 'soy_sauce'], baseScore: 22.00, timeLimit: 55 },
+  { id: 'beef_chow_fun', chapter: 1, dishType: 'plate', displayIcons: ['🍜', '🥩'], name: 'Beef Chow Fun', requires: ['beef', 'noodle', 'scallion', 'soy_sauce', 'oyster_sauce'], baseScore: 22.50, timeLimit: 50 },
+  { id: 'braised_shiitake', chapter: 1, dishType: 'plate', displayIcons: ['🍄', '🥬'], name: 'Braised Shiitake', requires: ['mushroom', 'gai_lan', 'oyster_sauce', 'wine'], baseScore: 23.50, timeLimit: 48 },
+  { id: 'beef_gailan', chapter: 2, dishType: 'plate', displayIcons: ['🥩', '🥬'], name: 'Beef & Gai Lan', requires: ['beef', 'gai_lan', 'oyster_sauce', 'wine'], baseScore: 26.00, timeLimit: 50 },
+  { id: 'fried_rice', chapter: 2, dishType: 'bowl', displayIcons: ['🍚', '🦐'], name: 'Yangzhou Fried Rice', requires: ['egg', 'rice', 'scallion', 'shrimp', 'msg'], baseScore: 40.00, timeLimit: 60 },
+  { id: 'drunken_shrimp_noodle', chapter: 3, dishType: 'bowl', displayIcons: ['🍜', '🦐'], name: 'Drunken Shrimp Noodle', requires: ['shrimp', 'noodle', 'scallion', 'wine', 'white_pepper'], baseScore: 42.50, timeLimit: 45 },
+  { id: 'xo_seafood_noodle', chapter: 4, dishType: 'plate', displayIcons: ['🍜', '🦐'], name: 'XO Seafood Noodles', requires: ['shrimp', 'noodle', 'scallion', 'xo_sauce'], baseScore: 98.00, timeLimit: 45 },
+  { id: 'char_siu_rice', chapter: 4, dishType: 'bowl', displayIcons: ['🍚', '🍖'], name: 'Sorrowful Rice (Char Siu)', requires: ['char_siu', 'rice', 'egg', 'scallion', 'soy_sauce'], baseScore: 120.00, timeLimit: 40 },
+];
+
+const SPECIAL_EVENTS = [
+  { id: 'rush', name: "TRIAD RUSH!", desc: "Half time limit!", icon: "⏱️", color: "bg-red-600 text-white border-red-400", modifier: (o) => ({ ...o, timeLimit: o.timeLimit * 0.5, timeLeft: o.timeLimit * 0.5, bonusCash: 40.00 }) },
+  { id: 'spicy', name: "SPICE FREAK!", desc: "Must add Chili!", icon: "🌶️", color: "bg-orange-600 text-white border-orange-400", modifier: (o) => ({ ...o, requires: [...o.requires, 'chili'], displayIcons: [...o.displayIcons, '🌶️'], bonusCombo: 1, bonusCash: 15.00 }) },
+  { id: 'drunk', name: "DRUNK MASTER!", desc: "Must add Wine!", icon: "🍶", color: "bg-purple-600 text-white border-purple-400", modifier: (o) => ({ ...o, requires: [...o.requires, 'wine'], displayIcons: [...o.displayIcons, '🍶'], bonusCash: 50.00 }) },
+  { id: 'wok_hei', name: "SIK SAN'S TEST!", desc: "Requires >90% Wok Hei!", icon: "🐉", color: "bg-fuchsia-600 text-white border-fuchsia-400", modifier: (o) => ({ ...o, requiresWokHei: 90, bonusCash: 80.00 }) },
+];
+
+const UPGRADES = [
+  { id: 'spatula', name: "Titanium Spatula", desc: "Buff: +20% Wok Hei generation.", cost: 150, icon: "🥄" },
+  { id: 'turbo_burner', name: "F-16 Jet Burner", desc: "Buff: +50% Cook Speed. Debuff: +50% Burn Rate.", cost: 350, icon: "🚀" },
+  { id: 'msg_shaker', name: "MSG Shaker of Doom", desc: "Buff: +25% Cash. Debuff: Customers lose patience 15% faster.", cost: 250, icon: "🧂" },
+  { id: 'cursed_chili', name: "Cursed Ghost Chili", desc: "Buff: +50% Cash earned. Debuff: Customers lose patience 30% faster!", cost: 600, icon: "🔥" },
+  { id: 'boombox', name: "Temple Street Boombox", desc: "Buff: Perfect chops in Prep give 3 points instead of 2.", cost: 700, icon: "📻" },
+  { id: 'iron_palm', name: "Iron Sand Palm Gloves", desc: "Buff: Tossing cools wok drastically (-6 heat). Debuff: -30% Wok Hei generation.", cost: 850, icon: "🧤" },
+  { id: 'carbon_seasoning', name: "Carbon Steel Seasoning", desc: "Buff: Reduces grime buildup by 50%.", cost: 1000, icon: "🧽" },
+  { id: 'monk_spoon', name: "Abbot's Wooden Spoon", desc: "Buff: Burn rate reduced by 80%. Debuff: Cooking speed reduced by 40%.", cost: 1200, icon: "🥢" },
+  { id: 'dragon_wok', name: "Golden Dragon Wok", desc: "Buff: +100% Wok Hei Bonus. Debuff: Residue builds 2x faster.", cost: 2000, icon: "🐉" },
+  { id: 'neon_hat', name: "Neon Chef Hat", desc: "Cosmetic: Upgrades your UI Chef Hat to a glowing neon pink.", cost: 1500, icon: "🧢" },
+  { id: 'golden_confetti', name: "Sik San's Confetti", desc: "Cosmetic: Perfect serves explode in pure gold confetti.", cost: 2500, icon: "✨" },
+  { id: 'rolex', name: "Triad Boss Rolex", desc: "Cosmetic: Adds a sparkling diamond to your cash display.", cost: 5000, icon: "⌚" },
+];
+
+// ==========================================
+// FIREBASE & APP
+// ==========================================
+let app, auth, db;
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+
+if (firebaseConfig && firebaseConfig.apiKey && getApps().length === 0) {
+  app = initializeApp(firebaseConfig);
+  auth = getAuth(app);
+  db = getFirestore(app);
+}
+
+const appId = (typeof __app_id !== 'undefined' ? __app_id : 'wok-star-default').toString().replace(/[^a-zA-Z0-9._-]/g, '_');
+
+const lerpColor = (c1, c2, ratio) => [
+  c1[0] + (c2[0] - c1[0]) * ratio,
+  c1[1] + (c2[1] - c1[1]) * ratio,
+  c1[2] + (c2[2] - c1[2]) * ratio,
+];
+const resolveColor = (raw, cooked, burnt, cookRatio, burnRatio) => {
+    let current = lerpColor(raw, cooked, cookRatio);
+    current = lerpColor(current, burnt, burnRatio);
+    return `rgb(${Math.round(current[0])}, ${Math.round(current[1])}, ${Math.round(current[2])})`;
+};
+
+const DishIcon = ({ type, icons, isLandscape }) => {
+  const sizeClass = isLandscape ? 'w-8 h-8 md:w-12 md:h-12' : 'w-12 h-12 md:w-16 md:h-16';
+  const iconSizeClass = isLandscape ? 'text-sm md:text-lg' : 'text-xl md:text-2xl';
+  return (
+    <div className={`relative flex items-center justify-center shrink-0 ${sizeClass}`}>
+      {type === 'plate' ? (
+        <svg viewBox="0 0 100 100" className="absolute inset-0 w-full h-full drop-shadow-md">
+          <ellipse cx="50" cy="55" rx="45" ry="30" fill="#f8f9fa" stroke="#1e3a8a" strokeWidth="3"/>
+          <ellipse cx="50" cy="55" rx="32" ry="20" fill="none" stroke="#1e3a8a" strokeWidth="1" strokeDasharray="4 2"/>
+        </svg>
+      ) : (
+        <svg viewBox="0 0 100 100" className="absolute inset-0 w-full h-full drop-shadow-md">
+          <path d="M 15 45 Q 50 95 85 45 Z" fill="#f8f9fa" stroke="#1e3a8a" strokeWidth="3"/>
+          <ellipse cx="50" cy="45" rx="35" ry="12" fill="#e5e7eb" stroke="#1e3a8a" strokeWidth="2"/>
+          <path d="M 30 55 Q 50 80 70 55" fill="none" stroke="#1e3a8a" strokeWidth="2" strokeDasharray="4 4"/>
+        </svg>
+      )}
+      <div className="relative flex items-center justify-center gap-0 z-10 -mt-1 md:-mt-2">
+        <span className={`${iconSizeClass} filter drop-shadow-md -mr-1`}>{String(icons[0])}</span>
+        <span className={`${iconSizeClass} filter drop-shadow-md z-10 mt-1 md:mt-2`}>{String(icons[1])}</span>
+      </div>
+    </div>
+  );
+};
+
+export default function App() {
+  const [difficulty, setDifficulty] = useState('NORMAL');
+  const [gameState, setGameState] = useState('MENU'); 
+  const [isStoryMode, setIsStoryMode] = useState(false);
+  const [currentChapter, setCurrentChapter] = useState(0);
+  
+  const [score, setScore] = useState(0); 
+  const [cash, setCash] = useState(0);   
+  const [soul, setSoul] = useState(0);
+  const [ownedUpgrades, setOwnedUpgrades] = useState([]);
+  
+  const [combo, setCombo] = useState(1);
+  const [reputation, setReputation] = useState(5);
+  
+  const flameTheme = combo >= 10 ? 'dark' : combo >= 5 ? 'angelic' : 'standard';
+  
+  const [orders, setOrders] = useState([]);
+  const [heatLevel, setHeatLevel] = useState(0);
+  const [wokContents, setWokContents] = useState([]);
+  const [cookProgress, setCookProgress] = useState(0); 
+  const [burnProgress, setBurnProgress] = useState(0);
+  const [wokHei, setWokHei] = useState(0);
+  const [wokResidue, setWokResidue] = useState(0); 
+  const [isCleaning, setIsCleaning] = useState(false);
+  
+  const [waterLevel, setWaterLevel] = useState(0);
+  const [waterDirtiness, setWaterDirtiness] = useState(0);
+  const [oilLevel, setOilLevel] = useState(20); 
+  const [isOiling, setIsOiling] = useState(false);
+  const [toss, setToss] = useState({ x: 0, y: 0 }); // 2D analog coordinate system (-1 to 1)
+  
+  const [prepItems, setPrepItems] = useState([]);
+  const [currentPrepIdx, setCurrentPrepIdx] = useState(0);
+  const [prepCursorPos, setPrepCursorPos] = useState(0);
+  const [prepChops, setPrepChops] = useState(0);
+  const [prepScore, setPrepScore] = useState(0); 
+  const [prepFeedback, setPrepFeedback] = useState(null);
+  const [activePrepBuff, setActivePrepBuff] = useState(null);
+
+  const [notifications, setNotifications] = useState([]);
+  const [streakPopup, setStreakPopup] = useState(null); 
+
+  const [viewport, setViewport] = useState({
+    isLandscape: typeof window !== 'undefined' ? window.innerWidth > window.innerHeight : false
+  });
+
+  useEffect(() => {
+    const handleResize = () => {
+      setViewport({
+        isLandscape: window.innerWidth > window.innerHeight
+      });
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const [showGuide, setShowGuide] = useState(false);
+  const [showRecipes, setShowRecipes] = useState(false);
+  const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [showShop, setShowShop] = useState(false);
+  const [showOptions, setShowOptions] = useState(false);
+  const [sfxVol, setSfxVol] = useState(50);
+  const [musicVol, setMusicVol] = useState(50);
+  const [user, setUser] = useState(null);
+  const [leaderboard, setLeaderboard] = useState([]);
+  const [playerName, setPlayerName] = useState('');
+  const [scoreSubmitted, setScoreSubmitted] = useState(false);
+
+  const canvasRef = useRef(null);
+  
+  const prevHeatRef = useRef(0);
+  useEffect(() => {
+    const isWhoosh = heatLevel > prevHeatRef.current + 15;
+    updateBurner(heatLevel, isWhoosh);
+    prevHeatRef.current = heatLevel;
+    updateSizzle(heatLevel, wokContents.length > 0);
+  }, [heatLevel, wokContents.length]);
+
+  useEffect(() => {
+    updateClean(isCleaning);
+  }, [isCleaning]);
+
+  const gameDataRef = useRef({
+    heatLevel: 0, wokContents: [], cookProgress: 0, burnProgress: 0, wokHei: 0, wokResidue: 0,
+    isTossing: false, tossTriggered: false, isCleaning: false, spawnedIngredients: [],
+    showGuide: false, showLeaderboard: false, showShop: false, showRecipes: false, flameTheme: 'standard',
+    serveTriggered: null, trashTriggered: false, orderFailedTriggered: false, ownedUpgrades: [],
+    activePrepBuff: null,
+    toss: { x: 0, y: 0 }, 
+    droppedItemsQueue: [],
+    difficulty: 'NORMAL',
+    oilLevel: 20,
+    isOiling: false,
+    waterLevel: 0,
+    waterDirtiness: 0,
+    cleanTossTriggered: false
+  });
+
+  useEffect(() => {
+    gameDataRef.current = { ...gameDataRef.current, heatLevel, wokContents, cookProgress, burnProgress, wokHei, wokResidue, isCleaning, showGuide, showLeaderboard, showShop, showRecipes, flameTheme, ownedUpgrades, activePrepBuff, difficulty, oilLevel, isOiling, toss, waterLevel, waterDirtiness };
+  }, [heatLevel, wokContents, cookProgress, burnProgress, wokHei, wokResidue, isCleaning, showGuide, showLeaderboard, showShop, showRecipes, flameTheme, ownedUpgrades, activePrepBuff, difficulty, oilLevel, isOiling, toss, waterLevel, waterDirtiness]);
+
+  useEffect(() => {
+    if (!auth) return;
+    const initAuth = async () => {
+      try {
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          await signInWithCustomToken(auth, __initial_auth_token);
+        } else {
+          await signInAnonymously(auth);
+        }
+      } catch(e) { console.error("Auth init error:", e); }
+    };
+    initAuth();
+    const unsubscribe = onAuthStateChanged(auth, setUser);
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user || !db) return;
+    const lbRef = collection(db, 'artifacts', appId, 'public', 'data', 'leaderboard');
+    const unsubscribe = onSnapshot(lbRef, (snapshot) => {
+      const data = snapshot.docs.map(doc => ({id: doc.id, ...doc.data()}));
+      const sorted = data.sort((a,b) => b.score - a.score).slice(0, 50);
+      setLeaderboard(sorted);
+    }, (err) => console.error("Leaderboard fetch error:", err));
+    return () => unsubscribe();
+  }, [user]);
+
+  // --- Prep Minigame Loop ---
+  useEffect(() => {
+      if (gameState !== 'PREP') return;
+      let pos = 0;
+      let dir = 1;
+      const speed = 1.2 + (currentChapter * 0.3); 
+      
+      const prepInterval = setInterval(() => {
+          pos += speed * dir;
+          if (pos >= 100) { pos = 100; dir = -1; }
+          if (pos <= 0) { pos = 0; dir = 1; }
+          setPrepCursorPos(pos);
+      }, 16);
+      return () => clearInterval(prepInterval);
+  }, [gameState, currentChapter]);
+
+  // --- Main Cooking Loop ---
+  useEffect(() => {
+    if (gameState !== 'PLAYING') return;
+
+    const tickRate = 100;
+    const interval = setInterval(() => {
+      const state = gameDataRef.current;
+      
+      if (state.showGuide || state.showLeaderboard || state.showShop || state.showRecipes) return;
+
+      setOrders(prevOrders => {
+        let repLost = 0;
+        const newOrders = prevOrders.map(order => {
+          const decayMult = 1.0 + (state.ownedUpgrades.includes('cursed_chili') ? 0.3 : 0) + (state.ownedUpgrades.includes('msg_shaker') ? 0.15 : 0);
+          const timeDecay = (tickRate / 1000) * decayMult;
+          const timeLeft = order.timeLeft - timeDecay;
+          
+          if (timeLeft <= 0 && !order.failed) {
+            repLost++;
+            showNotification(`Order Failed! -1 Star`, 'error');
+            setCombo(1); 
+            gameDataRef.current.orderFailedTriggered = true; 
+            return { ...order, timeLeft: 0, failed: true };
+          }
+          return { ...order, timeLeft };
+        }).filter(o => o.timeLeft > -2); 
+
+        if (repLost > 0) setReputation(r => Math.max(0, r - repLost));
+        return newOrders;
+      });
+
+      if (Math.random() < 0.02 && state.orders?.length < 3) {
+        const availableRecipes = isStoryMode 
+            ? RECIPES.filter(r => r.chapter <= currentChapter) 
+            : RECIPES;
+        let baseRecipe = availableRecipes[Math.floor(Math.random() * availableRecipes.length)];
+        let newOrder = { ...baseRecipe, id: Date.now(), timeLeft: baseRecipe.timeLimit };
+        
+        if ((!isStoryMode || currentChapter > 0) && Math.random() < 0.25) {
+            const event = SPECIAL_EVENTS[Math.floor(Math.random() * SPECIAL_EVENTS.length)];
+            if (!(event.id === 'spicy' && baseRecipe.requires.includes('chili')) &&
+                !(event.id === 'drunk' && baseRecipe.requires.includes('wine'))) {
+                newOrder = event.modifier(newOrder);
+                newOrder.specialEvent = event;
+            }
+        }
+        
+        setOrders(prev => [...prev, newOrder]);
+      }
+
+      if (state.droppedItemsQueue.length > 0) {
+         setWokContents(prev => {
+            let next = [...prev];
+            let nextSpawned = [...state.spawnedIngredients];
+            let wastageCost = 0;
+            
+            state.droppedItemsQueue.forEach(droppedId => {
+                const idx = next.lastIndexOf(droppedId);
+                if (idx !== -1) next.splice(idx, 1);
+                
+                const spawnIdx = nextSpawned.lastIndexOf(droppedId);
+                if (spawnIdx !== -1) nextSpawned.splice(spawnIdx, 1);
+                
+                const itemKey = Object.keys(ALL_ITEMS).find(k => ALL_ITEMS[k].id === droppedId);
+                if (itemKey) wastageCost += ALL_ITEMS[itemKey].cost * DIFF_MULTS[state.difficulty].spill;
+            });
+            state.spawnedIngredients = nextSpawned;
+            
+            if (wastageCost > 0) {
+                setCash(c => c - wastageCost);
+                showNotification(`Wastage! -$${wastageCost.toFixed(2)}`, 'error');
+            }
+            
+            return next;
+         });
+         state.droppedItemsQueue = [];
+         setCombo(1); 
+      }
+
+      if (state.isCleaning) {
+         setWaterLevel(prev => Math.min(100, prev + 8)); 
+         const removedResidue = Math.min(state.wokResidue, 3);
+         setWokResidue(prev => Math.max(0, prev - removedResidue));
+         setWaterDirtiness(prev => Math.min(100, prev + removedResidue * 3));
+         setHeatLevel(prev => Math.max(0, prev - 3)); 
+         setOilLevel(0);
+      }
+      
+      if (state.isOiling) {
+         setOilLevel(prev => Math.min(100, prev + 6)); 
+      }
+
+      // Passive oil vaporization: If heat is dangerously high, oil slowly burns away into smoke!
+      if (state.heatLevel > 80 && state.oilLevel > 0) {
+         setOilLevel(prev => Math.max(0, prev - (state.heatLevel - 80) * 0.03)); 
+      }
+
+      if (state.wokContents.length > 0) {
+        let newCook = state.cookProgress;
+        let newBurn = state.burnProgress;
+        let newWokHei = state.wokHei;
+        const heatFactor = state.heatLevel / 100;
+
+        const prepBuff = state.activePrepBuff || { cash: 1.0, cook: 1.0, burn: 1.0 };
+        const diffMults = typeof DIFF_MULTS !== 'undefined' ? DIFF_MULTS[state.difficulty] : { burn: 1.0 };
+
+        let whMult = 1;
+        if (state.ownedUpgrades.includes('spatula')) whMult += 0.2;
+        if (state.ownedUpgrades.includes('dragon_wok')) whMult += 1.0;
+
+        let burnResist = 1;
+        if (state.ownedUpgrades.includes('turbo_burner')) burnResist += 0.5; 
+        if (state.ownedUpgrades.includes('monk_spoon')) burnResist -= 0.8; 
+
+        let cookSpeedMod = 1;
+        if (state.ownedUpgrades.includes('turbo_burner')) cookSpeedMod += 0.5; 
+
+        const isFoodMoving = state.isTossing;
+        const burnMultiplier = isFoodMoving ? 0.02 : 0.6; 
+        const cookMultiplier = isFoodMoving ? 1.5 : 0.5;
+
+        // OIL MODIFIERS
+        const isDry = state.oilLevel < 20;
+        const isGreasy = state.oilLevel > 75;
+        const oilCookMod = isGreasy ? 0.4 : 1.0; 
+        const oilBurnMod = isDry ? 3.0 : 1.0; 
+        const oilResidueMod = isDry ? 3.0 : 0.5; 
+
+        const complexity = state.wokContents.length;
+        const baseCookSpeed = Math.max(0.5, (6 - complexity) * 0.3);
+
+        if (state.heatLevel > 20) {
+            newCook += (heatFactor * 0.8) * baseCookSpeed * cookSpeedMod * cookMultiplier * prepBuff.cook * oilCookMod; 
+        }
+
+        const residueBurnMultiplier = 1 + (state.wokResidue / 30); 
+
+        if (state.heatLevel > 70) {
+          if (state.isTossing) {
+            // WOK HEI REQUIRES OIL!
+            if (state.oilLevel > 5) {
+                const wokHeiGain = Math.max(3.0, 8.0 - (state.wokResidue / 20)) * whMult;
+                newWokHei = Math.min(100, newWokHei + wokHeiGain);
+                setOilLevel(prev => Math.max(0, prev - 1.5)); 
+            }
+          }
+          newBurn += ((state.heatLevel - 65) * 0.002) * residueBurnMultiplier * burnMultiplier * burnResist * prepBuff.burn * diffMults.burn * oilBurnMod;
+          if (!state.isTossing) newWokHei = Math.max(0, newWokHei - 0.2); 
+        } else {
+           newWokHei = Math.max(0, newWokHei - 0.3); 
+        }
+
+        setWokResidue(prev => Math.min(100, prev + ((0.15 + (heatFactor * 0.3)) * oilResidueMod)));
+
+        setCookProgress(Math.min(100, newCook));
+        setBurnProgress(Math.min(100, newBurn));
+        setWokHei(newWokHei);
+      } else {
+        setWokHei(prev => Math.max(0, prev - 1));
+      }
+    }, tickRate);
+    return () => clearInterval(interval);
+  }, [gameState, isStoryMode, currentChapter, difficulty]);
+
+  useEffect(() => {
+    if (reputation <= 0 && gameState === 'PLAYING') setGameState('GAMEOVER');
+  }, [reputation, gameState]);
+
+  // --- Engine Physics Canvas ---
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    let animationFrameId;
+
+    let particles = [];
+    let foodBodies = [];
+    let oilParticles = []; 
+    let waterParticles = [];
+    let floatingTexts = [];
+    let shockwaves = [];
+    let screenShake = 0;
+    
+    let wokAnimX = 0;
+    let wokAnimY = 0;
+    let wokAnimAngle = 0;
+    let prevWokX = null; 
+    let prevWokY = null; 
+    
+    let wokVelX = 0;   
+    let wokVelY = 0;   
+    let wokVelAngle = 0;
+    let metalTemp = 0; // Tracks the heat state of the physical wok metal
+    let cleanThrowPos = 0; // Tracks the smooth sweeping animation
+    let cleanThrowVel = 0;
+    
+    const cw = canvas.width;
+    const ch = canvas.height;
+    const wokCenterX = cw / 2;
+    const wokCenterY = ch / 2 + 30; 
+    const wokRadius = 140;
+
+    let lastDrawTime = performance.now();
+    const fpsInterval = 1000 / 60; // 60 FPS cap for high-refresh rate monitors
+
+    const renderLoop = (time) => {
+      animationFrameId = requestAnimationFrame(renderLoop);
+      
+      if (!time) time = performance.now();
+      const elapsed = time - lastDrawTime;
+      if (elapsed < fpsInterval) return;
+      lastDrawTime = time - (elapsed % fpsInterval);
+
+      const state = gameDataRef.current;
+
+      if (state.showGuide || state.showLeaderboard || state.showShop || state.showRecipes || gameState === 'STORY_CHAPTER' || gameState === 'PREP' || gameState === 'EPILOGUE') {
+         return; 
+      }
+
+      ctx.save();
+      ctx.clearRect(0, 0, cw, ch);
+      
+      if (screenShake > 0) {
+        ctx.translate((Math.random() - 0.5) * screenShake, (Math.random() - 0.5) * screenShake);
+        screenShake *= 0.8; 
+        if (screenShake < 0.5) screenShake = 0;
+      }
+
+      // Clean Toss Throw Simulation
+      if (state.cleanTossTriggered) {
+          state.cleanTossTriggered = false;
+          cleanThrowVel = 80; // Inject a smooth, massive velocity kick instead of instantly snapping
+          screenShake = Math.max(screenShake, 5); // Softer shake for grace
+          playTossShhh();
+          
+          const dirt = state.waterDirtiness / 100;
+          const r = Math.floor(34 + dirt * 100);
+          const g = Math.floor(211 - dirt * 100);
+          const b = Math.floor(238 - dirt * 180);
+
+          // Launch ALL existing water particles out dynamically
+          waterParticles.forEach(wp => {
+              particles.push({
+                  type: 'splash',
+                  color: `rgba(${r}, ${g}, ${b}, 0.8)`,
+                  x: wp.x, y: wp.y,
+                  vx: 25 + Math.random() * 20, // Sweep them hard right
+                  vy: -15 - Math.random() * 15,
+                  life: 1, maxLife: 30 + Math.random() * 30, size: wp.size * 2.5
+              });
+          });
+          
+          // Absolute guarantee no water remains in the pan
+          waterParticles = [];
+          setWaterLevel(0);
+          setWaterDirtiness(0);
+      }
+
+      // Graceful clean throw spring physics
+      cleanThrowVel -= cleanThrowPos * 0.12; // Spring tension gently pulling back to neutral
+      cleanThrowVel *= 0.85; // Dampening/Friction for a smooth arc
+      cleanThrowPos += cleanThrowVel;
+
+      // 1:1 Analog Mapping: Vertical UI track translates to a horizontal, tilted physical ellipse
+      // We inject the cleanThrowPos into the target variables so it seamlessly overrides the slider
+      const targetWokX = state.toss.x * 90 + cleanThrowPos;
+      const targetWokY = state.toss.y * 35 - (cleanThrowPos * 0.2); // Lift slightly on the throw
+      const targetAngle = state.toss.x * -0.35 + (cleanThrowPos * 0.012); // Tilt down gracefully
+
+      // Tiny 0.4 lerp to smooth out mouse sensor jitter, but instantly responsive
+      wokAnimX += (targetWokX - wokAnimX) * 0.4;
+      wokAnimY += (targetWokY - wokAnimY) * 0.4;
+      wokAnimAngle += (targetAngle - wokAnimAngle) * 0.4;
+      
+      const currentWokX = wokCenterX + wokAnimX;
+      const currentWokY = wokCenterY + wokAnimY;
+
+      // Calculate instantaneous wok velocity for food sloshing and fluid forces
+      if (prevWokX === null) { prevWokX = currentWokX; prevWokY = currentWokY; }
+      const wokVx = currentWokX - prevWokX;
+      const wokVy = currentWokY - prevWokY;
+      prevWokX = currentWokX;
+      prevWokY = currentWokY;
+
+      // Wok Hei pulse background
+      if (state.wokHei > 80) {
+         const pulse = Math.sin(Date.now() / 150) * 0.2 + 0.8;
+         const gradient = ctx.createRadialGradient(currentWokX, currentWokY, 0, currentWokX, currentWokY, wokRadius * 2.5);
+         gradient.addColorStop(0, `rgba(217, 70, 239, ${0.4 * pulse})`); 
+         gradient.addColorStop(0.4, `rgba(168, 85, 247, ${0.15 * pulse})`); 
+         gradient.addColorStop(1, 'rgba(0, 0, 0, 0)');
+         ctx.fillStyle = gradient;
+         ctx.beginPath();
+         ctx.arc(currentWokX, currentWokY, wokRadius * 2.5, 0, Math.PI * 2);
+         ctx.fill();
+      }
+
+      // Spawn new ingredients
+      if (state.wokContents.length > state.spawnedIngredients.length) {
+        const newIngId = state.wokContents[state.spawnedIngredients.length];
+        state.spawnedIngredients.push(newIngId);
+
+        // Add slight vertical randomization to prevent perfect coordinate overlaps which break soft-body engines
+        const spawnY = currentWokY - 200 - (Math.random() * 50); 
+        const dropVy = 8 + Math.random() * 6;
+
+        const LIQUIDS = ['soy_sauce', 'oyster_sauce', 'wine', 'xo_sauce'];
+        const DUSTS = ['msg', 'white_pepper', 'five_spice', 'salt', 'sugar'];
+
+        if (LIQUIDS.includes(newIngId)) {
+            const liquidColor = newIngId === 'soy_sauce' ? 'rgba(50, 25, 10, 0.8)' : newIngId === 'wine' ? 'rgba(200, 120, 20, 0.7)' : newIngId === 'xo_sauce' ? 'rgba(180, 60, 10, 0.9)' : 'rgba(20, 10, 5, 0.9)';
+            for (let i = 0; i < 40; i++) {
+              particles.push({ type: 'splash', color: liquidColor, x: currentWokX + (Math.random() - 0.5) * 80, y: spawnY - Math.random() * 20, vx: (Math.random() - 0.5) * 2, vy: dropVy, life: 1, maxLife: 20 + Math.random() * 10, size: 3 + Math.random() * 4 });
+            }
+        } else if (DUSTS.includes(newIngId)) {
+            let dustColor = 'rgba(255, 255, 255, 0.9)'; // default salt, msg
+            if (newIngId === 'sugar') dustColor = 'rgba(240, 240, 245, 0.8)';
+            if (newIngId === 'five_spice') dustColor = 'rgba(139, 69, 19, 0.8)';
+            if (newIngId === 'white_pepper') dustColor = 'rgba(220, 220, 210, 0.8)';
+            for (let i = 0; i < 50; i++) {
+              particles.push({ type: 'dust', color: dustColor, x: currentWokX + (Math.random() - 0.5) * 100, y: spawnY - Math.random() * 30, vx: (Math.random() - 0.5) * 3, vy: dropVy, life: 1, maxLife: 30 + Math.random() * 20, size: 1 + Math.random() * 2 });
+            }
+        } else if (newIngId === 'rice') {
+          for (let i = 0; i < 50; i++) {
+            foodBodies.push({ type: 'grain', id: newIngId, x: currentWokX + (Math.random() - 0.5) * 80, y: spawnY - Math.random() * 50, vx: (Math.random() - 0.5) * 5, vy: dropVy, rotation: Math.random() * Math.PI, rotSpeed: (Math.random() - 0.5) * 0.4, size: 6 + Math.random() * 2 });
+          }
+        } else if (newIngId === 'egg') {
+          for (let i = 0; i < 15; i++) {
+            const blobs = Array(3).fill(0).map(()=>({x: (Math.random()-0.5)*8, y: (Math.random()-0.5)*8, r: 4+Math.random()*4}));
+            foodBodies.push({ type: 'egg', id: newIngId, blobs, x: currentWokX + (Math.random() - 0.5) * 80, y: spawnY - Math.random() * 50, vx: (Math.random() - 0.5) * 5, vy: dropVy, rotation: Math.random() * Math.PI, rotSpeed: (Math.random() - 0.5) * 0.2, size: 12 });
+          }
+        } else if (newIngId === 'beef') {
+          for (let i = 0; i < 8; i++) {
+            foodBodies.push({ type: 'beef', id: newIngId, w: 25+Math.random()*15, h: 12+Math.random()*6, x: currentWokX + (Math.random() - 0.5) * 80, y: spawnY - Math.random() * 50, vx: (Math.random() - 0.5) * 5, vy: dropVy, rotation: Math.random() * Math.PI, rotSpeed: (Math.random() - 0.5) * 0.3, size: 20 });
+          }
+        } else if (newIngId === 'char_siu') {
+          for (let i = 0; i < 10; i++) {
+            foodBodies.push({ type: 'char_siu', id: newIngId, w: 18+Math.random()*8, h: 14+Math.random()*6, x: currentWokX + (Math.random() - 0.5) * 80, y: spawnY - Math.random() * 50, vx: (Math.random() - 0.5) * 5, vy: dropVy, rotation: Math.random() * Math.PI, rotSpeed: (Math.random() - 0.5) * 0.3, size: 18 });
+          }
+        } else if (newIngId === 'noodle') {
+          for (let i = 0; i < 12; i++) {
+            foodBodies.push({ type: 'noodle', id: newIngId, w: 60+Math.random()*30, h: 4+Math.random()*3, x: currentWokX + (Math.random() - 0.5) * 80, y: spawnY - Math.random() * 50, vx: (Math.random() - 0.5) * 5, vy: dropVy, rotation: Math.random() * Math.PI, rotSpeed: (Math.random() - 0.5) * 0.2, size: 26 });
+          }
+        } else if (newIngId === 'shrimp') {
+          for (let i = 0; i < 7; i++) {
+            foodBodies.push({ type: 'shrimp', id: newIngId, x: currentWokX + (Math.random() - 0.5) * 80, y: spawnY - Math.random() * 50, vx: (Math.random() - 0.5) * 5, vy: dropVy, rotation: Math.random() * Math.PI, rotSpeed: (Math.random() - 0.5) * 0.4, size: 14 + Math.random() * 3 });
+          }
+        } else if (newIngId === 'gai_lan') {
+          for (let i = 0; i < 10; i++) {
+            foodBodies.push({ type: 'gai_lan', id: newIngId, w: 12+Math.random()*8, h: 25+Math.random()*10, x: currentWokX + (Math.random() - 0.5) * 80, y: spawnY - Math.random() * 50, vx: (Math.random() - 0.5) * 5, vy: dropVy, rotation: Math.random() * Math.PI, rotSpeed: (Math.random() - 0.5) * 0.4, size: 24 });
+          }
+        } else if (newIngId === 'mushroom') {
+          for (let i = 0; i < 12; i++) {
+            foodBodies.push({ type: 'mushroom', id: newIngId, w: 18+Math.random()*8, h: 18+Math.random()*8, x: currentWokX + (Math.random() - 0.5) * 80, y: spawnY - Math.random() * 50, vx: (Math.random() - 0.5) * 5, vy: dropVy, rotation: Math.random() * Math.PI, rotSpeed: (Math.random() - 0.5) * 0.4, size: 20 });
+          }
+        } else if (newIngId === 'chili') {
+          for (let i = 0; i < 15; i++) {
+            foodBodies.push({ type: 'chili', id: newIngId, x: currentWokX + (Math.random() - 0.5) * 80, y: spawnY - Math.random() * 50, vx: (Math.random() - 0.5) * 5, vy: dropVy, rotation: Math.random() * Math.PI, rotSpeed: (Math.random() - 0.5) * 0.5, size: 7 + Math.random() * 3 });
+          }
+        } else if (newIngId === 'scallion') {
+          for (let i = 0; i < 25; i++) {
+            foodBodies.push({ type: 'scallion', id: newIngId, x: currentWokX + (Math.random() - 0.5) * 80, y: spawnY - Math.random() * 50, vx: (Math.random() - 0.5) * 5, vy: dropVy, rotation: Math.random() * Math.PI, rotSpeed: (Math.random() - 0.5) * 0.5, size: 8 + Math.random() * 3 });
+          }
+        } else if (newIngId === 'garlic') {
+          for (let i = 0; i < 15; i++) {
+            foodBodies.push({ type: 'garlic', id: newIngId, x: currentWokX + (Math.random() - 0.5) * 80, y: spawnY - Math.random() * 50, vx: (Math.random() - 0.5) * 5, vy: dropVy, rotation: Math.random() * Math.PI, rotSpeed: (Math.random() - 0.5) * 0.5, size: 5 + Math.random() * 2 });
+          }
+        } else if (newIngId === 'ginger') {
+          for (let i = 0; i < 20; i++) {
+            foodBodies.push({ type: 'ginger', id: newIngId, x: currentWokX + (Math.random() - 0.5) * 80, y: spawnY - Math.random() * 50, vx: (Math.random() - 0.5) * 5, vy: dropVy, rotation: Math.random() * Math.PI, rotSpeed: (Math.random() - 0.5) * 0.5, size: 4 + Math.random() * 2 });
+          }
+        }
+      } else if (state.wokContents.length === 0) {
+        foodBodies = [];
+        state.spawnedIngredients = [];
+      }
+
+      // ==========================================
+      // PHYSICS: GRAVITY, COLLISION & OVERLAPS
+      // ==========================================
+      
+      const isTossingGlobal = Math.abs(wokVx) > 1 || Math.abs(wokVy) > 1;
+
+      // 1. PHYSICS: Gravity & Rotation
+      foodBodies.forEach(f => {
+        let mass = 2.5; 
+        if (['beef', 'char_siu', 'gai_lan'].includes(f.id)) mass = 3.8; 
+        else if (['rice', 'noodle', 'mushroom', 'shrimp'].includes(f.id)) mass = 2.8; 
+        else if (['egg', 'scallion', 'chili', 'garlic', 'ginger'].includes(f.id)) mass = 2.0; 
+
+        f.vy += 0.8 + (0.1 * mass); // Normal gravity
+        
+        // Aggressively kill tiny micro-movements when resting so the pile sleeps
+        if (!isTossingGlobal) {
+           if (Math.abs(f.vx) < 0.2) f.vx = 0;
+           if (Math.abs(f.vy) < 0.2 && f.y > currentWokY) f.vy = 0;
+        }
+
+        f.x += f.vx;
+        f.y += f.vy;
+        f.rotation += f.rotSpeed;
+      });
+
+      // 2. PHYSICS: Wok Collisions & Friction
+      foodBodies.forEach(f => {
+        const dx = f.x - currentWokX;
+        
+        let mass = 2.5; 
+        if (['beef', 'char_siu', 'gai_lan'].includes(f.id)) mass = 3.8; 
+        else if (['rice', 'noodle', 'mushroom', 'shrimp'].includes(f.id)) mass = 2.8; 
+        else if (['egg', 'scallion', 'chili', 'garlic', 'ginger'].includes(f.id)) mass = 2.0; 
+
+        if (!f.spilled) {
+            // Adjusted spill bounds for the vertical cutaway walls
+            if (Math.abs(dx) > wokRadius + 5 && f.y > currentWokY - 5) {
+                f.spilled = true;
+                state.droppedItemsQueue.push(f.id);
+                floatingTexts.push({ text: "Spilled!", x: f.x, y: f.y - 30, life: 1, maxLife: 50, color: '#ef4444', size: 24, vy: -2 });
+                playTrash(); 
+            }
+        }
+
+        if (!f.spilled) {
+            const maxDx = wokRadius - 5;
+            const clampedDx = Math.max(-maxDx, Math.min(maxDx, dx));
+            const angleOffset = Math.tan(wokAnimAngle) * clampedDx;
+            
+            const groundY = currentWokY + angleOffset + Math.sqrt(wokRadius*wokRadius - clampedDx*clampedDx) - f.size/2;
+
+            if (f.y >= groundY) {
+              if (f.vy > 3) playFoodImpact(); 
+              
+              f.y = groundY;
+              
+              if (isTossingGlobal) {
+                  f.vy *= -0.2; // Slight bounce
+                  f.vx *= 0.9;  // Glides easily
+                  f.rotSpeed *= 0.8;
+                  
+                  // Natural curve sliding during toss
+                  f.vx -= (clampedDx / maxDx) * (2.0 / mass); 
+
+                  const safeVx = Math.max(-18, Math.min(18, wokVx));
+                  const safeVy = Math.max(-18, Math.min(18, wokVy));
+                  f.vx += safeVx * (0.15 / mass); 
+                  f.vy += safeVy * 0.3; 
+                  f.vx += Math.sin(wokAnimAngle) * (2.0 / mass);
+              } else {
+                  // RESTING MODE: Massive inertia to stick to the bottom
+                  f.vy = 0;
+                  f.vx *= 0.3; // Brutal friction completely stops the endless climbing
+                  f.rotSpeed = 0;
+                  
+                  // Only apply slope gravity if it's really far up the wall, otherwise let it stick in the pile
+                  if (Math.abs(dx) > wokRadius * 0.4) {
+                      f.vx -= (clampedDx / maxDx) * 0.5; 
+                  } else {
+                      // Center pocket: instant dead zone
+                      if (Math.abs(f.vx) < 1.0) f.vx = 0;
+                  }
+              }
+            }
+            
+            if (f.y > currentWokY - 150) {
+                if (f.x < currentWokX - wokRadius + 15) { f.x = currentWokX - wokRadius + 15; f.vx *= -0.5; }
+                if (f.x > currentWokX + wokRadius - 15) { f.x = currentWokX + wokRadius - 15; f.vx *= -0.5; }
+            }
+        } else {
+            f.vy += 0.8 * mass;
+        }
+      });
+      
+      foodBodies = foodBodies.filter(f => f.y < ch + 100);
+
+      // 3. PHYSICS: Soft Body Overlaps
+      for (let step = 0; step < 2; step++) { 
+         for (let i = 0; i < foodBodies.length; i++) {
+             for (let j = i + 1; j < foodBodies.length; j++) {
+                 let f1 = foodBodies[i], f2 = foodBodies[j];
+                 let dx = f2.x - f1.x;
+                 let dy = f2.y - f1.y;
+                 let distSq = dx*dx + dy*dy;
+                 
+                 // Smaller min-distance when resting allows highly dense piling!
+                 let minDist = (f1.size + f2.size) * (isTossingGlobal ? 0.55 : 0.45); 
+                 let minDistSq = minDist * minDist;
+
+                 if (distSq < minDistSq && distSq > 0.01) {
+                     let dist = Math.sqrt(distSq);
+                     
+                     // Weak overlap force when resting prevents explosive "crawling"
+                     let overlap = (minDist - dist) * (isTossingGlobal ? 0.5 : 0.1); 
+                     
+                     let nx = dx / dist;
+                     let ny = dy / dist;
+
+                     // Bias stacking: Pushes the higher object UP vertically instead of OUT horizontally
+                     if (!isTossingGlobal) {
+                         if (Math.abs(ny) < 0.7) { 
+                             ny = ny < 0 ? -0.8 : 0.8; 
+                             nx *= 0.3; // Massively reduce horizontal side-spreading
+                         }
+                     }
+
+                     f1.x -= nx * overlap;
+                     f1.y -= ny * overlap;
+                     f2.x += nx * overlap;
+                     f2.y += ny * overlap;
+
+                     let relVx = f2.vx - f1.vx;
+                     let relVy = f2.vy - f1.vy;
+                     
+                     // Only transfer bouncy squishy momentum when actively tossing
+                     const aerationForce = isTossingGlobal ? 0.3 : 0.0; 
+                     
+                     f1.vx += relVx * aerationForce;
+                     f1.vy += relVy * aerationForce;
+                     f2.vx -= relVx * aerationForce;
+                     f2.vy -= relVy * aerationForce;
+
+                     // Aggressive wiping of all energy when they are clumped in the bottom together
+                     if (!isTossingGlobal) {
+                         f1.vx *= 0.5;
+                         f2.vx *= 0.5;
+                         f1.vy *= 0.8;
+                         f2.vy *= 0.8;
+                     }
+                 }
+             }
+         }
+      }
+
+      // ==========================================
+      // OIL FLUID PARTICLE ENGINE
+      // ==========================================
+      const targetOilCount = Math.floor(state.oilLevel * 3.5); 
+      const missingOil = targetOilCount - oilParticles.length;
+      
+      if (missingOil > 0) {
+          // Instantly spawn existing oil in the pan, actively stream new oil if pouring
+          const spawnAmount = state.isOiling ? Math.min(12, missingOil) : missingOil;
+          for(let i=0; i<spawnAmount; i++) {
+              const isInstant = !state.isOiling;
+              oilParticles.push({
+                  x: currentWokX + (Math.random() - 0.5) * (isInstant ? 100 : 10),
+                  y: isInstant ? currentWokY + 50 + Math.random()*50 : currentWokY - 180 - Math.random() * 10,
+                  vx: (Math.random() - 0.5) * (isInstant ? 3 : 0.8),
+                  vy: isInstant ? 0 : Math.random() * 2 + 8,
+                  size: 1.5 + Math.random() * 2.0,
+                  spilled: false,
+                  depthOffset: Math.random()
+              });
+          }
+      } else if (missingOil < 0) {
+          const removeCount = Math.min(Math.abs(missingOil), 10);
+          for(let i=0; i<removeCount; i++) {
+              const unspilledIdx = oilParticles.findIndex(p => !p.spilled);
+              if (unspilledIdx !== -1) oilParticles.splice(unspilledIdx, 1);
+              else oilParticles.pop();
+          }
+      }
+
+      oilParticles.forEach(p => {
+          p.vy += 0.8; 
+          p.x += p.vx;
+          p.y += p.vy;
+
+          const dx = p.x - currentWokX;
+          
+          if (!p.spilled && Math.abs(dx) > wokRadius + 15 && p.y > currentWokY - 20) {
+              p.spilled = true;
+          }
+
+          if (!p.spilled) {
+              const maxDx = wokRadius - 2;
+              const clampedDx = Math.max(-maxDx, Math.min(maxDx, dx));
+              const angleOffset = Math.tan(wokAnimAngle) * clampedDx;
+              
+              const groundY = currentWokY + angleOffset + Math.sqrt(wokRadius*wokRadius - clampedDx*clampedDx) - p.size;
+              
+              const poolDepth = state.oilLevel * 0.8;
+              const surfaceY = currentWokY + wokRadius - p.size - poolDepth;
+
+              let targetY = groundY;
+
+              if (surfaceY < groundY) {
+                  targetY = surfaceY + (groundY - surfaceY) * p.depthOffset;
+              }
+
+              if (p.y >= targetY) {
+                  p.y = targetY; 
+                  p.vy *= -0.1; 
+                  p.vx *= 0.9; 
+
+                  if (targetY === groundY) {
+                      p.vx -= clampedDx * 0.06; 
+                  } else {
+                      p.vx += (Math.random() - 0.5) * 3.5; 
+                  }
+
+                  const safeVx = Math.max(-18, Math.min(18, wokVx));
+                  const safeVy = Math.max(-18, Math.min(18, wokVy));
+                  p.vx += safeVx * 0.03;
+                  p.vy += safeVy * 0.1;
+                  p.vx += Math.sin(wokAnimAngle) * 1.0; 
+              }
+              
+              if (Math.abs(dx) > wokRadius * 0.7 && p.y < currentWokY + 30) {
+                  p.vy += 2.0; 
+                  p.vx *= 0.5; 
+              }
+
+              if (p.y > currentWokY - 120) {
+                  if (p.x < currentWokX - wokRadius + 5) { p.x = currentWokX - wokRadius + 5; p.vx *= -0.5; }
+                  if (p.x > currentWokX + wokRadius - 5) { p.x = currentWokX + wokRadius - 5; p.vx *= -0.5; }
+              }
+          }
+      });
+      
+      oilParticles = oilParticles.filter(p => p.y < ch + 100);
+
+      // ==========================================
+      // WATER FLUID PARTICLE ENGINE (CLEANING)
+      // ==========================================
+      const targetWaterCount = Math.floor(state.waterLevel * 4.0); 
+      const missingWater = targetWaterCount - waterParticles.length;
+      
+      if (missingWater > 0 && state.isCleaning) {
+          const spawnAmount = Math.min(15, missingWater);
+          for(let i=0; i<spawnAmount; i++) {
+              waterParticles.push({
+                  x: currentWokX + (Math.random() - 0.5) * 20, 
+                  y: currentWokY - 180 - Math.random() * 10,
+                  vx: (Math.random() - 0.5) * 1.5,
+                  vy: Math.random() * 3 + 10, 
+                  size: 2.0 + Math.random() * 2.0,
+                  spilled: false,
+                  depthOffset: Math.random() 
+              });
+          }
+      }
+
+      waterParticles.forEach(p => {
+          p.vy += 0.6; 
+          p.x += p.vx;
+          p.y += p.vy;
+
+          const dx = p.x - currentWokX;
+          
+          if (!p.spilled && Math.abs(dx) > wokRadius + 5 && p.y > currentWokY - 20) {
+              p.spilled = true;
+          }
+
+          if (!p.spilled) {
+              const maxDx = wokRadius - 2;
+              const clampedDx = Math.max(-maxDx, Math.min(maxDx, dx));
+              const angleOffset = Math.tan(wokAnimAngle) * clampedDx;
+              
+              const groundY = currentWokY + angleOffset + Math.sqrt(wokRadius*wokRadius - clampedDx*clampedDx) - p.size;
+              const poolDepth = state.waterLevel * 0.9;
+              const surfaceY = currentWokY + wokRadius - p.size - poolDepth;
+
+              let targetY = groundY;
+              if (surfaceY < groundY) targetY = surfaceY + (groundY - surfaceY) * p.depthOffset;
+
+              if (p.y >= targetY) {
+                  p.y = targetY; 
+                  p.vy *= -0.1; 
+                  p.vx *= 0.95; 
+
+                  if (targetY === groundY) {
+                      p.vx -= clampedDx * 0.08; 
+                  } else {
+                      p.vx += (Math.random() - 0.5) * 4.5; 
+                  }
+
+                  const safeVx = Math.max(-18, Math.min(18, wokVx));
+                  const safeVy = Math.max(-18, Math.min(18, wokVy));
+                  p.vx += safeVx * 0.05;
+                  p.vy += safeVy * 0.15;
+                  p.vx += Math.sin(wokAnimAngle) * 2.0; 
+              }
+              
+              if (Math.abs(dx) > wokRadius * 0.7 && p.y < currentWokY + 30) {
+                  p.vy += 2.5; 
+                  p.vx *= 0.5; 
+              }
+
+              if (p.y > currentWokY - 120) {
+                  if (p.x < currentWokX - wokRadius + 5) { p.x = currentWokX - wokRadius + 5; p.vx *= -0.5; }
+                  if (p.x > currentWokX + wokRadius - 5) { p.x = currentWokX + wokRadius - 5; p.vx *= -0.5; }
+              }
+          }
+      });
+      waterParticles = waterParticles.filter(p => p.y < ch + 100);
+
+      // ==========================================
+      // RENDERING PHASE: WOK, FLUIDS, FOOD, & PARTICLES
+      // ==========================================
+
+      // 1. Volumetric Fire Definition
+      const drawFlameLayer = (layerName) => {
+        ctx.globalCompositeOperation = 'lighter';
+        particles.forEach(p => {
+          if (p.type !== 'fire' || p.layer !== layerName) return;
+          const lifeRatio = p.life / p.maxLife;
+          if (lifeRatio >= 1) return;
+          const currentSize = Math.max(0.1, p.size * (1 - lifeRatio * 0.3));
+          let hue; 
+          if (state.flameTheme === 'dark') {
+             hue = 140 - lifeRatio * 80; 
+          } else if (state.flameTheme === 'angelic') {
+             hue = 280 + lifeRatio * 70; 
+          } else { 
+             const baseHue = 60 - (state.heatLevel * 0.6); 
+             hue = Math.max(0, baseHue - lifeRatio * 20); 
+          }
+          const alpha = (1 - lifeRatio) * 0.5;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, currentSize, 0, Math.PI * 2);
+          ctx.fillStyle = `hsla(${hue}, 100%, 50%, ${alpha})`;
+          ctx.fill();
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, currentSize * 0.4, 0, Math.PI * 2);
+          ctx.fillStyle = `hsla(${hue}, 100%, 70%, ${alpha * 1.5})`;
+          ctx.fill();
+        });
+        ctx.globalCompositeOperation = 'source-over';
+      };
+
+      // 2. Shockwaves
+      ctx.save();
+      ctx.globalCompositeOperation = 'screen';
+      for (let i = shockwaves.length - 1; i >= 0; i--) {
+          let sw = shockwaves[i];
+          sw.r += sw.speed;
+          let alpha = 1 - (sw.r / sw.maxR);
+          if (alpha <= 0) {
+              shockwaves.splice(i, 1);
+          } else {
+              ctx.beginPath();
+              ctx.arc(sw.x, sw.y, sw.r, 0, Math.PI * 2);
+              ctx.strokeStyle = `rgba(${sw.color}, ${alpha})`;
+              ctx.lineWidth = (sw.maxR - sw.r) * 0.05;
+              ctx.stroke();
+          }
+      }
+      ctx.restore();
+
+      // 3. Back Flames
+      drawFlameLayer('back');
+
+      // 4. Wok Outer Hull & Glowing Metal
+      if (state.isCleaning) {
+          metalTemp = 0; // Instant quench
+      } else {
+          const targetTemp = state.heatLevel > 20 ? state.heatLevel : 0;
+          if (targetTemp > metalTemp) {
+              metalTemp += (targetTemp - metalTemp) * 0.05;
+          } else {
+              metalTemp += (targetTemp - metalTemp) * 0.005;
+          }
+      }
+
+      ctx.save();
+      ctx.translate(currentWokX, currentWokY);
+      ctx.rotate(wokAnimAngle);
+      
+      ctx.beginPath();
+      ctx.arc(0, 0, wokRadius, 0, Math.PI);
+      let wokColor = '#161616'; 
+      if (state.burnProgress >= 100) wokColor = '#050505';
+      else if (state.cookProgress > 80) wokColor = '#241700';
+      ctx.lineWidth = 14;
+      ctx.strokeStyle = wokColor;
+      ctx.stroke();
+
+      if (metalTemp > 5) {
+          const glowIntensity = metalTemp / 100;
+          ctx.beginPath();
+          ctx.arc(0, 0, wokRadius, 0, Math.PI);
+          const linGrad = ctx.createLinearGradient(0, wokRadius + 5, 0, wokRadius * 0.2);
+          linGrad.addColorStop(0, `rgba(255, 120, 0, ${glowIntensity * 1.5})`);
+          linGrad.addColorStop(0.4, `rgba(239, 68, 68, ${glowIntensity * 1.2})`);
+          linGrad.addColorStop(1, `rgba(239, 68, 68, 0)`);
+          ctx.strokeStyle = linGrad;
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.shadowColor = `rgba(255, 60, 0, ${glowIntensity})`;
+          ctx.shadowBlur = 30 * glowIntensity;
+          ctx.lineWidth = 14;
+          ctx.stroke();
+          ctx.shadowBlur = 0;
+          ctx.lineWidth = 8;
+          ctx.stroke();
+          ctx.globalCompositeOperation = 'source-over';
+      }
+      ctx.restore();
+
+      // 5. Front Flames
+      drawFlameLayer('front');
+
+      // 6. Wok Inner Bowl Mask
+      ctx.save();
+      ctx.translate(currentWokX, currentWokY);
+      ctx.rotate(wokAnimAngle);
+      
+      ctx.beginPath();
+      ctx.arc(0, 0, wokRadius - 7, 0, Math.PI);
+      ctx.fillStyle = '#0a0a0a';
+      ctx.fill();
+      
+      ctx.beginPath();
+      ctx.arc(0, 0, wokRadius - 4, 0, Math.PI);
+      ctx.lineWidth = 4;
+      ctx.strokeStyle = '#333';
+      ctx.stroke();
+      
+      if (state.wokResidue > 0) {
+         ctx.beginPath();
+         ctx.arc(0, 0, wokRadius - 8, 0, Math.PI);
+         ctx.lineWidth = 8;
+         ctx.strokeStyle = `rgba(28, 16, 0, ${state.wokResidue / 100})`;
+         ctx.stroke();
+      }
+      
+      ctx.beginPath();
+      ctx.moveTo(-wokRadius, 0);
+      ctx.lineTo(-wokRadius - 70, -25);
+      ctx.lineWidth = 18;
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = '#111';
+      ctx.stroke();
+      ctx.restore();
+
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+
+      // 7. Render Fluids (Oil & Water)
+      if (oilParticles.length > 0) {
+          ctx.save();
+          
+          ctx.fillStyle = 'rgba(234, 179, 8, 0.4)'; 
+          oilParticles.forEach(p => {
+              ctx.beginPath();
+              ctx.arc(p.x, p.y, p.size * 2.0, 0, Math.PI * 2);
+              ctx.fill();
+          });
+
+          ctx.fillStyle = 'rgba(253, 224, 71, 0.8)'; 
+          oilParticles.forEach(p => {
+              ctx.beginPath();
+              ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+              ctx.fill();
+          });
+          
+          ctx.restore();
+      }
+
+      if (waterParticles.length > 0) {
+          ctx.save();
+          const dirt = state.waterDirtiness / 100;
+          const r = Math.floor(34 + dirt * 100);
+          const g = Math.floor(211 - dirt * 100);
+          const b = Math.floor(238 - dirt * 180);
+          
+          ctx.fillStyle = `rgba(${r}, ${g}, ${b}, 0.5)`; 
+          waterParticles.forEach(p => {
+              ctx.beginPath();
+              ctx.arc(p.x, p.y, p.size * 2.5, 0, Math.PI * 2);
+              ctx.fill();
+          });
+
+          ctx.fillStyle = `rgba(${r + 30}, ${g + 30}, ${b + 30}, 0.8)`; 
+          waterParticles.forEach(p => {
+              ctx.beginPath();
+              ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+              ctx.fill();
+          });
+          
+          ctx.restore();
+      }
+
+      // 8. Render Food Bodies
+      const cookRatio = state.cookProgress / 100;
+      const burnRatio = state.burnProgress / 100;
+      const hasSoy = state.wokContents.includes('soy_sauce');
+      const hasOyster = state.wokContents.includes('oyster_sauce');
+      const hasXO = state.wokContents.includes('xo_sauce');
+
+      const applySauceTint = (colorArr) => {
+         let [r, g, b] = colorArr;
+         if (hasSoy) { r *= 0.8; g *= 0.7; b *= 0.5; }
+         if (hasOyster) { r *= 0.7; g *= 0.6; b *= 0.4; }
+         if (hasXO) { r *= 0.9; g *= 0.6; b *= 0.4; }
+         return [r, g, b];
+      };
+
+      foodBodies.forEach(f => {
+        ctx.save();
+        ctx.translate(f.x, f.y);
+        ctx.rotate(f.rotation);
+
+        if (f.y < currentWokY - 40 && state.heatLevel > 80) {
+            ctx.shadowColor = '#fbbf24';
+            ctx.shadowBlur = 15;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+        }
+        
+        if (f.type === 'grain') {
+           const color = resolveColor(applySauceTint([250,250,245]), applySauceTint([200,140,50]), [30,30,30], cookRatio, burnRatio);
+           ctx.fillStyle = color;
+           ctx.beginPath();
+           ctx.ellipse(0, 0, f.size, f.size * 0.45, 0, 0, Math.PI * 2);
+           ctx.fill();
+           ctx.strokeStyle = 'rgba(0,0,0,0.1)';
+           ctx.lineWidth = 1;
+           ctx.stroke();
+           ctx.fillStyle = 'rgba(255,255,255,0.4)';
+           ctx.beginPath();
+           ctx.ellipse(-f.size/4, -f.size/8, f.size/3, f.size/8, 0, 0, Math.PI * 2);
+           ctx.fill();
+
+        } else if (f.type === 'egg') {
+           const color = resolveColor(applySauceTint([255,220,50]), applySauceTint([240,160,20]), [40,30,20], cookRatio, burnRatio);
+           ctx.fillStyle = color;
+           ctx.beginPath();
+           f.blobs.forEach(b => {
+              ctx.moveTo(b.x + b.r, b.y);
+              ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+           });
+           ctx.fill();
+           
+           const yolkColor = resolveColor(applySauceTint([255,180,20]), applySauceTint([220,120,10]), [30,20,10], cookRatio, burnRatio);
+           ctx.fillStyle = yolkColor;
+           f.blobs.forEach(b => {
+              if (b.r > 5) {
+                  ctx.beginPath();
+                  ctx.arc(b.x, b.y, b.r * 0.6, 0, Math.PI*2);
+                  ctx.fill();
+              }
+           });
+
+           ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+           f.blobs.forEach(b => {
+              ctx.beginPath();
+              ctx.arc(b.x - b.r*0.3, b.y - b.r*0.3, b.r*0.25, 0, Math.PI * 2);
+              ctx.fill();
+           });
+
+        } else if (f.type === 'beef') {
+           const color = resolveColor(applySauceTint([150,40,40]), applySauceTint([90,50,40]), [20,15,15], cookRatio, burnRatio);
+           ctx.fillStyle = color;
+           ctx.beginPath();
+           ctx.moveTo(-f.w/2, -f.h/2 + 2);
+           ctx.quadraticCurveTo(0, -f.h/2 - 3, f.w/2, -f.h/2);
+           ctx.quadraticCurveTo(f.w/2 + 3, 0, f.w/2, f.h/2);
+           ctx.quadraticCurveTo(0, f.h/2 + 3, -f.w/2, f.h/2 - 2);
+           ctx.quadraticCurveTo(-f.w/2 - 3, 0, -f.w/2, -f.h/2 + 2);
+           ctx.fill();
+           
+           ctx.strokeStyle = resolveColor(applySauceTint([220,200,200]), applySauceTint([150,120,110]), [30,25,25], cookRatio, burnRatio);
+           ctx.lineWidth = 1;
+           ctx.beginPath();
+           ctx.moveTo(-f.w/3, -f.h/4);
+           ctx.quadraticCurveTo(0, 0, f.w/4, f.h/4);
+           ctx.moveTo(f.w/6, -f.h/3);
+           ctx.quadraticCurveTo(0, 0, -f.w/4, f.h/3);
+           ctx.stroke();
+           
+           ctx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+           ctx.beginPath();
+           ctx.ellipse(-f.w/6, -f.h/4, f.w/5, f.h/8, Math.PI/6, 0, Math.PI*2);
+           ctx.fill();
+
+        } else if (f.type === 'char_siu') {
+           const edgeColor = resolveColor(applySauceTint([200,60,60]), applySauceTint([160,40,40]), [30,20,20], cookRatio, burnRatio);
+           ctx.fillStyle = edgeColor;
+           ctx.beginPath();
+           if (ctx.roundRect) ctx.roundRect(-f.w/2, -f.h/2, f.w, f.h, 4);
+           else ctx.rect(-f.w/2, -f.h/2, f.w, f.h);
+           ctx.fill();
+           
+           const innerColor = resolveColor(applySauceTint([220,140,120]), applySauceTint([150,70,50]), [20,15,15], cookRatio, burnRatio);
+           ctx.fillStyle = innerColor;
+           ctx.beginPath();
+           if (ctx.roundRect) ctx.roundRect(-f.w/2 + 2, -f.h/2 + 2, f.w - 4, f.h - 4, 2);
+           else ctx.rect(-f.w/2 + 2, -f.h/2 + 2, f.w - 4, f.h - 4);
+           ctx.fill();
+
+           ctx.fillStyle = resolveColor(applySauceTint([80,20,20]), applySauceTint([50,10,10]), [10,5,5], cookRatio, burnRatio);
+           ctx.fillRect(f.w/2 - 3, -f.h/2 + 1, 2, f.h - 2);
+
+           ctx.fillStyle = 'rgba(255,255,255,0.25)';
+           ctx.beginPath();
+           ctx.ellipse(-f.w/4, -f.h/3, f.w/4, f.h/8, 0, 0, Math.PI*2);
+           ctx.fill();
+
+        } else if (f.type === 'noodle') {
+           const color = resolveColor(applySauceTint([245,240,230]), applySauceTint([210,180,120]), [40,35,30], cookRatio, burnRatio);
+           ctx.strokeStyle = color;
+           ctx.lineWidth = f.h;
+           ctx.lineCap = 'round';
+           ctx.lineJoin = 'round';
+           
+           ctx.beginPath();
+           ctx.moveTo(-f.w/2, 0);
+           ctx.bezierCurveTo(-f.w/4, -f.w/3, f.w/4, f.w/3, f.w/2, 0);
+           ctx.stroke();
+           
+           ctx.strokeStyle = 'rgba(255,255,255,0.3)';
+           ctx.lineWidth = f.h * 0.3;
+           ctx.beginPath();
+           ctx.moveTo(-f.w/2 + 2, 0);
+           ctx.bezierCurveTo(-f.w/4 + 2, -f.w/3 + 2, f.w/4 - 2, f.w/3 - 2, f.w/2 - 2, 0);
+           ctx.stroke();
+
+        } else if (f.type === 'shrimp') {
+           const color = resolveColor(applySauceTint([240,190,190]), applySauceTint([255,110,80]), [50,30,20], cookRatio, burnRatio);
+           ctx.strokeStyle = color;
+           ctx.lineWidth = f.size * 0.7;
+           ctx.lineCap = 'round';
+           ctx.beginPath();
+           ctx.arc(0, 0, f.size*0.7, -Math.PI*0.8, Math.PI*0.2, false);
+           ctx.stroke();
+           
+           ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+           ctx.lineWidth = 1;
+           for(let a = -Math.PI*0.6; a <= 0; a += 0.4) {
+               ctx.beginPath();
+               ctx.moveTo(Math.cos(a) * (f.size*0.4), Math.sin(a) * (f.size*0.4));
+               ctx.lineTo(Math.cos(a) * (f.size*1.0), Math.sin(a) * (f.size*1.0));
+               ctx.stroke();
+           }
+
+           const tailColor = resolveColor(applySauceTint([255,100,100]), applySauceTint([220,60,60]), [40,20,20], cookRatio, burnRatio);
+           ctx.fillStyle = tailColor;
+           ctx.beginPath();
+           ctx.moveTo(f.size*0.6, f.size*0.2);
+           ctx.lineTo(f.size*1.2, f.size*0.8);
+           ctx.lineTo(f.size*0.4, f.size*0.9);
+           ctx.fill();
+
+           ctx.fillStyle = 'rgba(255,255,255,0.3)';
+           ctx.beginPath();
+           ctx.arc(Math.cos(-Math.PI*0.4) * f.size*0.7, Math.sin(-Math.PI*0.4) * f.size*0.7, f.size*0.2, 0, Math.PI*2);
+           ctx.fill();
+
+        } else if (f.type === 'gai_lan') {
+           const stemColor = resolveColor(applySauceTint([140,220,120]), applySauceTint([100,180,80]), [20,30,20], cookRatio, burnRatio);
+           ctx.fillStyle = stemColor;
+           ctx.fillRect(-f.w/4, -f.h/2, f.w/2, f.h);
+           
+           const leafColor = resolveColor(applySauceTint([60,160,60]), applySauceTint([40,120,40]), [10,20,10], cookRatio, burnRatio);
+           ctx.fillStyle = leafColor;
+           ctx.beginPath();
+           ctx.moveTo(0, -f.h/2);
+           ctx.quadraticCurveTo(f.w*0.8, -f.h/2, f.w*0.8, 0);
+           ctx.quadraticCurveTo(f.w*0.8, f.h/2, 0, f.h/4);
+           ctx.fill();
+           
+           ctx.strokeStyle = 'rgba(20,50,20,0.3)';
+           ctx.lineWidth = 1.5;
+           ctx.beginPath();
+           ctx.moveTo(0, -f.h/4);
+           ctx.lineTo(f.w*0.6, -f.h/8);
+           ctx.stroke();
+
+        } else if (f.type === 'mushroom') {
+           const stemColor = resolveColor(applySauceTint([220,200,180]), applySauceTint([180,160,140]), [30,30,30], cookRatio, burnRatio);
+           ctx.fillStyle = stemColor;
+           ctx.fillRect(-f.w/6, 0, f.w/3, f.h/2);
+           const capColor = resolveColor(applySauceTint([120,80,60]), applySauceTint([90,50,30]), [20,15,10], cookRatio, burnRatio);
+           ctx.fillStyle = capColor;
+           
+           ctx.beginPath();
+           ctx.ellipse(0, 0, f.w/2, f.h/2.5, 0, Math.PI, 0); 
+           ctx.fill();
+           
+           ctx.strokeStyle = stemColor; 
+           ctx.lineWidth = 2;
+           ctx.beginPath();
+           ctx.moveTo(-f.w/4, -f.h/4);
+           ctx.lineTo(f.w/4, -f.h/8);
+           ctx.moveTo(f.w/4, -f.h/4);
+           ctx.lineTo(-f.w/4, -f.h/8);
+           ctx.stroke();
+
+        } else if (f.type === 'chili') {
+           const color = resolveColor(applySauceTint([220,40,40]), applySauceTint([180,30,30]), [30,10,10], cookRatio, burnRatio);
+           ctx.fillStyle = color;
+           ctx.beginPath();
+           ctx.moveTo(-f.size, 0);
+           ctx.quadraticCurveTo(0, -f.size*0.6, f.size, 0);
+           ctx.quadraticCurveTo(0, f.size*0.6, -f.size, 0);
+           ctx.fill();
+           
+           ctx.fillStyle = '#2e8b57';
+           ctx.fillRect(f.size * 0.8, -f.size*0.15, f.size*0.5, f.size*0.3);
+           
+           ctx.fillStyle = 'rgba(255,255,255,0.3)';
+           ctx.beginPath();
+           ctx.ellipse(0, -f.size*0.2, f.size/2, f.size/8, 0, 0, Math.PI*2);
+           ctx.fill();
+
+        } else if (f.type === 'scallion') {
+           const color = resolveColor(applySauceTint([100,220,100]), applySauceTint([120,160,80]), [30,30,20], cookRatio, burnRatio);
+           const strokeColor = resolveColor(applySauceTint([50,150,50]), applySauceTint([80,100,50]), [15,15,10], cookRatio, burnRatio);
+           
+           ctx.strokeStyle = strokeColor;
+           ctx.lineWidth = 2;
+           ctx.beginPath();
+           ctx.arc(0, 0, f.size/1.5, 0, Math.PI*2);
+           ctx.stroke();
+           
+           ctx.strokeStyle = color;
+           ctx.lineWidth = 2.5;
+           ctx.beginPath();
+           ctx.arc(0, 0, f.size/2, 0, Math.PI*2);
+           ctx.stroke();
+           
+           ctx.fillStyle = resolveColor(applySauceTint([200,255,200]), applySauceTint([160,180,120]), [20,20,15], cookRatio, burnRatio);
+           ctx.beginPath();
+           ctx.arc(0, 0, f.size/4, 0, Math.PI*2);
+           ctx.fill();
+        
+        } else if (f.type === 'garlic') {
+           const color = resolveColor(applySauceTint([250,245,230]), applySauceTint([220,180,100]), [50,30,20], cookRatio, burnRatio);
+           ctx.fillStyle = color;
+           ctx.beginPath();
+           ctx.ellipse(0, 0, f.size, f.size * 0.6, 0, 0, Math.PI * 2);
+           ctx.fill();
+        } else if (f.type === 'ginger') {
+           const color = resolveColor(applySauceTint([240,220,150]), applySauceTint([200,160,80]), [40,25,15], cookRatio, burnRatio);
+           ctx.fillStyle = color;
+           ctx.fillRect(-f.size, -f.size/2, f.size*2, f.size);
+        }
+        ctx.restore();
+      });
+
+      // 9. Draw Cleaning Sponge
+      if (state.isCleaning) {
+          ctx.save();
+          ctx.translate(brushX, brushY);
+          ctx.rotate(brushAngle);
+          
+          ctx.fillStyle = '#facc15'; 
+          ctx.beginPath();
+          if(ctx.roundRect) ctx.roundRect(-25, -10, 50, 20, 4); else ctx.rect(-25,-10,50,20);
+          ctx.fill();
+          
+          ctx.fillStyle = '#16a34a'; 
+          ctx.beginPath();
+          if(ctx.roundRect) ctx.roundRect(-25, -14, 50, 8, 2); else ctx.rect(-25,-14,50,8);
+          ctx.fill();
+          
+          ctx.restore();
+      }
+
+      // 10. Update & Apply Foreground Particles (Smoke, Splash, Dust, Bubbles)
+      particles.forEach(p => {
+        if (p.type === 'fire') {
+            if (p.wobbleSpeed) {
+                p.vx += Math.sin(p.life * p.wobbleSpeed + p.wobbleOffset) * 0.8;
+            }
+            p.size *= 0.95; 
+            
+            const dx = p.x - currentWokX;
+            if (p.y > currentWokY - 10) {
+                if (Math.abs(dx) < wokRadius + 15) {
+                    const wokOuterCurveY = currentWokY + Math.sqrt(Math.max(0, wokRadius*wokRadius - dx*dx));
+                    const pushDir = dx >= 0 ? 1 : -1;
+                    p.vx += pushDir * 0.8; 
+                    
+                    if (p.y < wokOuterCurveY + 2) {
+                        p.y = wokOuterCurveY + 2; 
+                        p.vy *= 0.8; 
+                    }
+                }
+            } else {
+                p.vy -= 0.6;
+                p.vx *= 0.9; 
+            }
+        } 
+        else if (p.type === 'smoke' || p.type === 'steam' || p.type === 'oil_smoke') {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, Math.max(0, p.size * (p.life / p.maxLife)), 0, Math.PI * 2);
+          const alpha = 1 - (p.life / p.maxLife);
+          if (p.type === 'smoke') ctx.fillStyle = `rgba(30, 30, 30, ${alpha * 0.8})`;
+          else if (p.type === 'oil_smoke') ctx.fillStyle = `rgba(180, 180, 190, ${alpha * 0.6})`;
+          else ctx.fillStyle = `rgba(220, 220, 220, ${alpha * 0.5})`;
+          ctx.fill();
+        } else if (p.type === 'splash' || p.type === 'dust') {
+          ctx.beginPath();
+          if (p.type === 'splash') ctx.ellipse(p.x, p.y, p.size * 0.5, p.size * 1.5, 0, 0, Math.PI * 2);
+          else ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.fillStyle = p.color;
+          ctx.fill();
+        } else if (p.type === 'water') {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(100, 200, 255, 0.8)';
+          ctx.fill();
+          p.vy += 0.5; 
+          if (p.y > wokCenterY) { p.y = wokCenterY; p.vy *= -0.5; p.vx *= 0.8; }
+        } else if (p.type === 'bubble') {
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(255, 255, 255, ${0.6 * (1 - p.life/p.maxLife)})`;
+          ctx.fill();
+          ctx.strokeStyle = `rgba(200, 240, 255, ${1 - p.life/p.maxLife})`;
+          ctx.stroke();
+        } else if (p.type === 'confetti') {
+          ctx.save();
+          ctx.translate(p.x, p.y);
+          ctx.rotate(p.rot);
+          ctx.fillStyle = p.color;
+          ctx.globalAlpha = 1 - (p.life / p.maxLife);
+          ctx.fillRect(-p.size/2, -p.size/2, p.size, p.size * 0.6);
+          ctx.restore();
+          p.rot += p.rotSpeed;
+          p.vy += 0.5; 
+        } else if (p.type === 'sparkle') {
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size * (1 - p.life/p.maxLife), 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(255, 215, 0, ${1 - p.life/p.maxLife})`;
+          ctx.fill();
+          ctx.globalCompositeOperation = 'source-over';
+        }
+        
+        p.x += p.vx;
+        p.y += p.vy;
+        p.life++;
+      });
+      particles = particles.filter(p => p.life < p.maxLife);
+
+      // 11. Draw Floating Text (Combo, Quality, Cash)
+      for (let i = floatingTexts.length - 1; i >= 0; i--) {
+          let ft = floatingTexts[i];
+          ft.y += ft.vy;
+          ft.life++;
+          let alpha = 1 - (ft.life / ft.maxLife);
+          if (alpha <= 0) {
+              floatingTexts.splice(i, 1);
+          } else {
+              ctx.save();
+              ctx.font = `900 ${ft.size}px sans-serif`;
+              ctx.textAlign = 'center';
+              ctx.fillStyle = ft.color;
+              ctx.globalAlpha = alpha;
+              ctx.shadowColor = 'rgba(0,0,0,0.8)';
+              ctx.shadowBlur = 4;
+              ctx.shadowOffsetX = 2;
+              ctx.shadowOffsetY = 2;
+              ctx.fillText(String(ft.text), ft.x, ft.y);
+              ctx.restore();
+          }
+      }
+
+      ctx.restore();
+    };
+
+    renderLoop(performance.now());
+    return () => cancelAnimationFrame(animationFrameId);
+  }, [gameState]);
+
+  // --- Helpers ---
+  const isUnlocked = (ingId) => {
+      if (!isStoryMode) return true; 
+      const unlockedReqs = new Set(RECIPES.filter(r => r.chapter <= currentChapter).flatMap(r => r.requires));
+      return unlockedReqs.has(ingId) || ['garlic', 'ginger', 'salt', 'sugar', 'five_spice'].includes(ingId);
+  };
+  
+  const getDynamicPrompt = () => {
+     if (wokContents.length === 0) {
+         if (combo >= 10) return { text: `Combo x${combo}! DARK ARTS UNLEASHED!`, color: "text-lime-400 drop-shadow-[0_0_5px_rgba(163,230,53,0.8)]" };
+         if (combo >= 5) return { text: `Combo x${combo}! ANGELIC FLAMES IGNITED!`, color: "text-purple-400 drop-shadow-[0_0_5px_rgba(192,132,252,0.8)]" };
+         if (combo > 1) return { text: `Combo x${combo}! Toss high to maintain streak!`, color: "text-orange-400" };
+         return { text: "Serve perfect dishes to start a streak.", color: "text-neutral-500" };
+     }
+     if (burnProgress > 75) return { text: "BURNING! TOSS NOW!", color: "text-red-500 animate-pulse font-black" };
+     if (cookProgress >= 90 && burnProgress < 20) return { text: "PERFECT! SERVE NOW!", color: "text-green-400 animate-bounce font-black" };
+     if (heatLevel > 80 && gameDataRef.current.isTossing && oilLevel > 5) return { text: "BUILDING WOK HEI...", color: "text-fuchsia-400 font-bold" };
+     return { text: "Keep heat > 80 to build Wok Hei.", color: "text-yellow-500" };
+  };
+
+  // --- Prep Minigame Functions ---
+  const startPrepPhase = () => {
+      const unlockedReqs = Array.from(new Set(RECIPES.filter(r => r.chapter <= currentChapter).flatMap(r => r.requires)));
+      const itemsToPrep = [];
+      for(let i=0; i<3; i++) {
+         itemsToPrep.push(unlockedReqs[Math.floor(Math.random() * unlockedReqs.length)]);
+      }
+      setPrepItems(itemsToPrep);
+      setCurrentPrepIdx(0);
+      setPrepChops(0);
+      setPrepScore(0);
+      setPrepFeedback(null);
+      setGameState('PREP');
+  };
+
+  const handlePrepChop = () => {
+      playChop(); 
+      const dist = Math.abs(50 - prepCursorPos);
+      let pts = 0;
+      
+      if (dist <= 8) { 
+          pts = gameDataRef.current.ownedUpgrades.includes('boombox') ? 3 : 2; 
+          setPrepFeedback({ text: "PERFECT CHOP!", color: "text-green-400" }); 
+      }
+      else if (dist <= 20) { 
+          pts = 1; 
+          setPrepFeedback({ text: "GOOD CHOP", color: "text-yellow-400" }); 
+      }
+      else { 
+          pts = 0; 
+          setPrepFeedback({ text: "MISS!", color: "text-red-500" }); 
+      }
+
+      setPrepScore(s => s + pts);
+      setTimeout(() => setPrepFeedback(null), 500);
+
+      if (prepChops + 1 >= 3) {
+          if (currentPrepIdx + 1 >= prepItems.length) {
+              const finalScore = prepScore + pts;
+              const maxScore = prepItems.length * 3 * 2; 
+              const ratio = finalScore / maxScore;
+              
+              let buff = null;
+              if (ratio >= 0.8) {
+                  buff = { name: "MICHELIN PREP", cash: 1.5, cook: 1.2, burn: 0.8, color: 'text-fuchsia-400', hex: '#e879f9' };
+              } else if (ratio >= 0.5) {
+                  buff = { name: "SOLID PREP", cash: 1.2, cook: 1.1, burn: 0.9, color: 'text-yellow-400', hex: '#facc15' };
+              } else {
+                  buff = { name: "SLOPPY PREP", cash: 1.0, cook: 1.0, burn: 1.0, color: 'text-neutral-500', hex: '#737373' };
+              }
+
+              setActivePrepBuff(buff);
+              triggerStreakPopup(`${buff.name}!`, buff.hex);
+              
+              setGameState('PLAYING');
+              const availableRecipes = RECIPES.filter(r => r.chapter <= currentChapter);
+              const startRecipe = availableRecipes[Math.floor(Math.random() * availableRecipes.length)];
+              setOrders([{ ...startRecipe, id: Date.now(), timeLeft: startRecipe.timeLimit }]);
+          } else {
+              setCurrentPrepIdx(i => i + 1);
+              setPrepChops(0);
+          }
+      } else {
+          setPrepChops(c => c + 1);
+      }
+  };
+
+  // --- Actions ---
+  const quitToMenu = () => {
+    emptyWok();
+    setOrders([]);
+    setActivePrepBuff(null);
+    setGameState('MENU');
+  };
+
+  const startGame = (mode) => {
+    initAudio();
+    setIsStoryMode(mode === 'STORY');
+    setScore(0);
+    setCash(0);
+    setSoul(0);
+    setOwnedUpgrades([]);
+    setCombo(1);
+    setReputation(5);
+    setWokResidue(0);
+    setOilLevel(20);
+    setActivePrepBuff(null);
+    setScoreSubmitted(false); 
+    emptyWok();
+    setOrders([]);
+    
+    if (mode === 'STORY') {
+       setCurrentChapter(0);
+       setGameState('STORY_CHAPTER');
+    } else {
+       setGameState('PLAYING');
+       setOrders([{ ...RECIPES[0], id: Date.now(), timeLeft: RECIPES[0].timeLimit }]);
+    }
+  };
+
+  const continueStory = () => {
+      initAudio();
+      startPrepPhase();
+  };
+
+  const buyUpgrade = (upgrade) => {
+      if (cash >= upgrade.cost && !ownedUpgrades.includes(upgrade.id)) {
+          setCash(c => c - upgrade.cost);
+          setOwnedUpgrades(prev => [...prev, upgrade.id]);
+          showNotification(`${upgrade.name} Acquired!`, "success");
+      }
+  };
+
+  const triggerStreakPopup = (text, color) => {
+      const id = Date.now();
+      setStreakPopup({ text: String(text), color: String(color), id });
+      setTimeout(() => {
+          setStreakPopup(prev => prev?.id === id ? null : prev);
+      }, 2000);
+  };
+
+  const forceNextOrder = () => {
+    if (orders.length >= 3) return;
+    const availableRecipes = isStoryMode ? RECIPES.filter(r => r.chapter <= currentChapter) : RECIPES;
+    const randomRecipe = availableRecipes[Math.floor(Math.random() * availableRecipes.length)];
+    setOrders(prev => [...prev, { ...randomRecipe, id: Date.now(), timeLeft: randomRecipe.timeLimit }]);
+  };
+
+  const handleMergeOrders = (dishName) => {
+    setOrders(prev => {
+        const matching = prev.filter(o => o.name === dishName && !o.failed && !o.isMerged);
+        if (matching.length < 2) return prev; 
+        
+        const others = prev.filter(o => !(o.name === dishName && !o.failed && !o.isMerged));
+        const count = matching.length;
+        const baseOrder = matching[0];
+        
+        let newRequires = [];
+        for(let i=0; i<count; i++) {
+            newRequires.push(...baseOrder.requires);
+        }
+        
+        const newTimeLimit = baseOrder.timeLimit * (1 + (count - 1) * 0.5);
+        
+        const mergedOrder = {
+            ...baseOrder,
+            id: Date.now(),
+            name: `${count}x ${baseOrder.name}`,
+            requires: newRequires,
+            timeLimit: newTimeLimit,
+            timeLeft: newTimeLimit,
+            baseScore: baseOrder.baseScore * count,
+            batchSize: count,
+            isMerged: true
+        };
+        
+        return [...others, mergedOrder];
+    });
+    showNotification(`Bulk Order Merged! Watch your heat!`, 'success');
+  };
+
+  const addIngredient = (ingId) => {
+    if (burnProgress >= 100) return;
+    if (wokResidue > 80 && wokContents.length === 0) {
+      showNotification("Wok is too filthy! Clean first!", "error");
+      return;
+    }
+    setWokContents(prev => {
+      if (prev.length >= 25) {
+        showNotification("Wok is full! (Max 25 items)", "error");
+        return prev;
+      }
+      playIngredientAdd(ingId);
+      
+      let absorption = 5; 
+      if (['rice', 'noodle'].includes(ingId)) absorption = 25; 
+      if (['egg', 'beef', 'char_siu', 'shrimp'].includes(ingId)) absorption = 15; 
+      setOilLevel(current => Math.max(0, current - absorption));
+
+      return [...prev, ingId];
+    });
+  };
+
+  const emptyWok = () => {
+    if (wokContents.length > 0) {
+       setWokResidue(prev => Math.min(100, prev + 15));
+    }
+    setWokContents([]);
+    setCookProgress(0);
+    setBurnProgress(0);
+    setWokHei(0);
+  };
+
+  const handleTrash = () => {
+    if (wokContents.length > 0) {
+      setCombo(1); 
+      gameDataRef.current.trashTriggered = true;
+      playTrash();
+    }
+    emptyWok();
+  };
+
+  const prevTossRef = useRef({ x: 0, y: 0 });
+
+  const handleTossPointer = (e) => {
+    if (e.type === 'pointermove' && e.buttons !== 1) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const rect = e.currentTarget.getBoundingClientRect();
+    
+    // Calculate relative coordinates from center
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    const maxRx = rect.width / 2;
+    const maxRy = rect.height / 2;
+
+    let dx = (e.clientX - centerX) / maxRx;
+    let dy = (e.clientY - centerY) / maxRy;
+
+    // Constrain thumb to an ellipse
+    const dist = Math.sqrt(dx*dx + dy*dy);
+    if (dist > 1) {
+        dx /= dist;
+        dy /= dist;
+    }
+
+    const newToss = { x: dx, y: dy };
+    
+    // Determine the speed of the user's sweep to trigger physical aerating/flames
+    const vX = dx - prevTossRef.current.x;
+    const vY = dy - prevTossRef.current.y;
+    const velocity = Math.sqrt(vX*vX + vY*vY);
+
+    if (velocity > 0.08) {
+        gameDataRef.current.tossTriggered = true;
+        if (velocity > 0.15) { 
+            playTossShhh();
+            // Significantly reduced heat penalty for tossing!
+            const coolAmount = gameDataRef.current.ownedUpgrades.includes('iron_palm') ? 1.5 : 0.5;
+            setHeatLevel(prev => Math.max(5, prev - coolAmount));
+        }
+    }
+
+    setToss(newToss);
+    prevTossRef.current = newToss;
+    gameDataRef.current.toss = newToss; // Update ref instantly for 60fps physics
+    gameDataRef.current.isTossing = velocity > 0.02 || dist > 0.8; 
+  };
+
+  const handleTossRelease = () => {
+    const center = { x: 0, y: 0 };
+    setToss(center);
+    prevTossRef.current = center;
+    gameDataRef.current.toss = center;
+    gameDataRef.current.isTossing = false;
+  };
+
+  const handleHeatPointer = (e) => {
+    if (e.type === 'pointermove' && e.buttons !== 1) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const newHeat = 100 - ((e.clientY - rect.top) / rect.height) * 100;
+    setHeatLevel(Math.round(Math.max(0, Math.min(100, newHeat))));
+  };
+
+  const handleCleanRelease = () => {
+    setIsCleaning(false);
+    if (gameDataRef.current.waterLevel > 0) {
+      gameDataRef.current.cleanTossTriggered = true;
+    }
+  };
+
+  const serveDish = (isDonation = false) => {
+    if (wokContents.length === 0) return;
+    if (burnProgress >= 100) {
+      if (isDonation) showNotification("Charity rejected burnt food!", "error");
+      setCombo(1);
+      gameDataRef.current.trashTriggered = true;
+      emptyWok();
+      return;
+    }
+
+    let wokFreq = {};
+    wokContents.forEach(item => {
+        wokFreq[item] = (wokFreq[item] || 0) + 1;
+    });
+
+    let matchedOrderIndex = -1;
+
+    for (let i = 0; i < orders.length; i++) {
+        const order = orders[i];
+        if (order.failed) continue;
+
+        let reqMap = {};
+        order.requires.forEach(req => reqMap[req] = (reqMap[req] || 0) + 1);
+
+        let canFulfill = true;
+        for (let req in reqMap) {
+            if ((wokFreq[req] || 0) < reqMap[req]) {
+                canFulfill = false;
+                break;
+            }
+        }
+
+        if (canFulfill) {
+            if (!isDonation && order.requiresWokHei && wokHei < order.requiresWokHei) {
+                showNotification("Failed! VIP demanded 90% Wok Hei!", "error");
+                setReputation(r => Math.max(0, r - 1));
+                setCombo(1);
+                gameDataRef.current.trashTriggered = true;
+                setOrders(prev => prev.filter((_, idx) => idx !== i));
+                emptyWok();
+                return;
+            }
+            matchedOrderIndex = i;
+            break;
+        }
+    }
+
+    if (matchedOrderIndex >= 0 && cookProgress >= 75) {
+        const order = orders[matchedOrderIndex];
+        const batchSize = order.batchSize || 1; 
+          
+        let totalCost = 0;
+        wokContents.forEach(item => {
+            const itemKey = Object.keys(ALL_ITEMS).find(k => ALL_ITEMS[k].id === item);
+            if (itemKey) totalCost += ALL_ITEMS[itemKey].cost;
+        });
+
+        let quality = "Good!";
+        let isPerfect = cookProgress >= 95 && burnProgress < 20;
+
+        let wokHeiMult = 1.0;
+        if (wokHei > 80) { wokHeiMult = 1.5; quality = "WOK HEI MASTER!"; }
+        if (isPerfect && wokHei <= 80) { quality = "Perfect!"; wokHeiMult = 1.2; }
+
+        let oilMult = 1.0;
+        if (oilLevel > 75) { 
+            quality = "Too Greasy!"; 
+            oilMult = 0.7; 
+        } else if (oilLevel >= 20 && oilLevel <= 75) { 
+            quality = "Perfect Texture! " + quality; 
+            oilMult = 1.25; 
+        }
+
+        let flavorMult = 1.0;
+        let activeCombos = [];
+        FLAVOR_COMBOS.forEach(comboData => {
+            if (comboData.items.every(i => wokContents.includes(i))) {
+                flavorMult *= comboData.mult;
+                activeCombos.push(comboData.name);
+            }
+        });
+        if (activeCombos.length > 0) quality = `${activeCombos.join(" + ")}!`;
+
+        const batchMultiplier = 1.0 + (batchSize - 1) * 0.4; 
+        if (batchSize > 1) quality = `BULK x${batchSize}! ` + quality;
+
+        const urgency = order.timeLeft / order.timeLimit;
+        let speedTip = urgency * 5.0 * batchMultiplier * batchSize; 
+
+        let baseRevenue = order.baseScore;
+        const prepMult = gameDataRef.current.activePrepBuff ? gameDataRef.current.activePrepBuff.cash : 1.0;
+        let finalRevenue = (baseRevenue * wokHeiMult * flavorMult * combo * prepMult * batchMultiplier * oilMult);
+        if (order.bonusCash) finalRevenue += order.bonusCash;
+
+        let cashMult = 1;
+        if (gameDataRef.current.ownedUpgrades.includes('cursed_chili')) cashMult += 0.5;
+        if (gameDataRef.current.ownedUpgrades.includes('msg_shaker')) cashMult += 0.25;
+        finalRevenue = (finalRevenue * cashMult) + speedTip;
+
+        let profit = Number((finalRevenue - totalCost).toFixed(2));
+        let newCombo = combo + batchSize;
+        if (order.bonusCombo) newCombo += (order.bonusCombo * batchSize);
+
+        if (isDonation) {
+            const gainedSoul = Math.floor(finalRevenue / 10) + batchSize;
+            setSoul(s => s + gainedSoul);
+            setCash(c => c - totalCost); 
+            triggerStreakPopup(`+${gainedSoul} SOUL! 🤍`, "#22d3ee"); 
+            gameDataRef.current.serveTriggered = {
+                points: `-${totalCost.toFixed(2)} (Donated)`,
+                quality: "Soulful Charity",
+                isPerfect: true
+            };
+        } else {
+            setCash(c => c + profit); 
+            setScore(s => s + finalRevenue); 
+            
+            if (newCombo >= 3 && combo < 3) triggerStreakPopup("HEATING UP! 🔥", "#f97316");
+            else if (newCombo >= 5 && combo < 5) triggerStreakPopup("WOK & ROLL! 🎸", "#eab308");
+            else if (newCombo >= 10 && combo < 10) triggerStreakPopup("SHAOLIN SPEED! 🥋", "#a855f7");
+            else if (newCombo >= 15 && combo < 15) triggerStreakPopup("SORROWFUL TEARS! 😭", "#3b82f6");
+            else if (newCombo >= 20 && newCombo % 5 === 0) triggerStreakPopup("SIK SAN! 🐉", "#ec4899");
+
+            gameDataRef.current.serveTriggered = {
+                points: profit,
+                quality: profit < 0 ? "Loss Margin!" : quality,
+                isPerfect: isPerfect
+            };
+        }
+
+        setCombo(newCombo);
+        playDing(isPerfect);
+        setOrders(prev => prev.filter((_, idx) => idx !== matchedOrderIndex));
+        emptyWok();
+
+        if (isStoryMode) {
+            const nextChap = STORY_CHAPTERS[currentChapter + 1];
+            if (nextChap && score >= nextChap.target * DIFF_MULTS[difficulty].target) {
+                setTimeout(() => {
+                    setCurrentChapter(curr => curr + 1);
+                    if (currentChapter + 1 === 5) setGameState('EPILOGUE');
+                    else setGameState('STORY_CHAPTER');
+                }, 1500); 
+            }
+        }
+
+    } else {
+        if (isDonation) {
+            let totalCost = 0;
+            wokContents.forEach(item => {
+                const itemKey = Object.keys(ALL_ITEMS).find(k => ALL_ITEMS[k].id === item);
+                if (itemKey) totalCost += ALL_ITEMS[itemKey].cost;
+            });
+            setCash(c => c - totalCost);
+            gameDataRef.current.serveTriggered = {
+                points: `-${totalCost.toFixed(2)}`,
+                quality: "Imperfect Donation",
+                isPerfect: false
+            };
+            setCombo(1); 
+            emptyWok();  
+        } else {
+            setReputation(r => Math.max(0, r - 1));
+            setCombo(1);
+            gameDataRef.current.trashTriggered = true;
+            emptyWok();
+        }
+    }
+  };
+
+  const showNotification = (msg, type = 'normal') => {
+    const id = Date.now();
+    setNotifications(prev => [...prev, { id, msg: String(msg), type }]);
+    setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), 2000);
+  };
+
+  const submitScoreToLeaderboard = async () => {
+    if (!user || !playerName.trim() || scoreSubmitted || score === 0) return;
+    try {
+      await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'leaderboard'), {
+        userId: user.uid,
+        name: playerName.trim(),
+        score: Number(score.toFixed(2)),
+        title: getScoreTitle(score).title,
+        timestamp: Date.now()
+      });
+      setScoreSubmitted(true);
+      setShowLeaderboard(true);
+    } catch (err) {
+      console.error("Error submitting score", err);
+      showNotification("Failed to save score.", "error");
+    }
+  };
+
+  const duplicateNames = [];
+  const nameCounts = {};
+  orders.forEach(o => {
+      if (!o.failed && !o.isMerged) {
+          nameCounts[o.name] = (nameCounts[o.name] || 0) + 1;
+          if (nameCounts[o.name] === 2 && !duplicateNames.includes(o.name)) {
+              duplicateNames.push(o.name);
+          }
+      }
+  });
+
+  const finalTitle = getScoreTitle(score);
+  const dynPrompt = getDynamicPrompt();
+
+  return (
+    <div className="absolute inset-0 bg-neutral-950 text-white font-sans overflow-hidden flex flex-col user-select-none pb-8 md:pb-12">
+      
+      {/* UI FLASH & STREAK ANIMATIONS */}
+      <style>{`
+        @keyframes pop {
+          0% { transform: scale(1); }
+          50% { transform: scale(1.3); text-shadow: 0 0 10px #facc15; }
+          100% { transform: scale(1); }
+        }
+        .animate-pop { animation: pop 0.3s ease-out; }
+        
+        @keyframes streak-zoom {
+            0% { transform: translate(-50%, -50%) scale(0.2) rotate(-10deg); opacity: 0; }
+            15% { transform: translate(-50%, -50%) scale(1.2) rotate(5deg); opacity: 1; text-shadow: 0 0 40px currentColor; }
+            25% { transform: translate(-50%, -50%) scale(1) rotate(0deg); opacity: 1; }
+            80% { transform: translate(-50%, -50%) scale(1.05) rotate(0deg); opacity: 1; }
+            100% { transform: translate(-50%, -50%) scale(1.5) rotate(5deg); opacity: 0; filter: blur(10px); }
+        }
+        .animate-streak { animation: streak-zoom 2s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+      `}</style>
+
+      {/* --- HEADER --- */}
+      <header className={`shrink-0 bg-neutral-900 border-b border-neutral-800 flex justify-between items-center z-20 shadow-xl relative ${viewport.isLandscape ? 'p-1 md:p-2' : 'p-2 md:p-4'}`}>
+        <div className="flex items-center gap-2 md:gap-4">
+          <div className="flex items-center gap-1 md:gap-2">
+            <ChefHat className={`w-5 h-5 md:w-7 md:h-7 ${ownedUpgrades.includes('neon_hat') ? 'text-fuchsia-500 drop-shadow-[0_0_10px_#d946ef] animate-pulse' : 'text-orange-500'}`} />
+            <h1 className="text-lg md:text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-orange-500 to-yellow-300 flex items-center gap-2">
+              WOK STAR
+              {activePrepBuff && activePrepBuff.name !== "SLOPPY PREP" && (
+                <span className={`text-[8px] md:text-[10px] uppercase tracking-widest ${activePrepBuff.color} border border-current px-2 py-0.5 rounded-full hidden md:inline-block`}>
+                  {String(activePrepBuff.name)}
+                </span>
+              )}
+            </h1>
+          </div>
+          <div className="bg-neutral-800 px-3 md:px-4 py-0.5 md:py-1 rounded-full text-green-400 font-mono text-sm md:text-lg border border-neutral-700 flex items-center gap-1 md:gap-2">
+            <span key={cash} className={`inline-block animate-pop ${cash < 0 ? 'text-red-500' : 'text-green-400'}`}>${Number(cash).toFixed(2)} {ownedUpgrades.includes('rolex') && '💎'}</span>
+            {soul > 0 && <span key={`soul-${soul}`} className="text-cyan-400 inline-block font-bold animate-pop flex items-center gap-1 ml-2"><Heart size={14} fill="currentColor" /> {soul}</span>}
+            {combo > 1 && <span key={combo} className="text-xs md:text-sm text-orange-400 inline-block font-black animate-pop ml-2">x{combo}</span>}
+          </div>
+        </div>
+        <div className="flex items-center gap-2 md:gap-3">
+          <button onClick={() => setShowOptions(true)} className="p-1.5 md:p-2 bg-neutral-800 hover:bg-neutral-700 rounded-full transition-colors text-blue-400 hover:text-blue-300 shadow-md" title="Options">
+            <Settings className="w-4 h-4 md:w-5 md:h-5" />
+          </button>
+          <button onClick={() => setShowShop(true)} className="p-1.5 md:p-2 bg-neutral-800 hover:bg-neutral-700 rounded-full transition-colors text-orange-400 hover:text-orange-300 shadow-md" title="Equipment Shop">
+            <ShoppingCart className="w-4 h-4 md:w-5 md:h-5" />
+          </button>
+          <button onClick={() => setShowLeaderboard(true)} className="p-1.5 md:p-2 bg-neutral-800 hover:bg-neutral-700 rounded-full transition-colors text-yellow-500 hover:text-yellow-400 shadow-md" title="Leaderboard">
+            <Trophy className="w-4 h-4 md:w-5 md:h-5" />
+          </button>
+          <button onClick={() => setShowRecipes(true)} className="p-1.5 md:p-2 bg-neutral-800 hover:bg-neutral-700 rounded-full transition-colors text-green-400 hover:text-green-300 shadow-md" title="Ledger & Recipes">
+            <BookOpen className="w-4 h-4 md:w-5 md:h-5" />
+          </button>
+          <button onClick={() => setShowGuide(true)} className="p-1.5 md:p-2 bg-neutral-800 hover:bg-neutral-700 rounded-full transition-colors text-neutral-400 hover:text-white" title="How to Play">
+            <Info className="w-4 h-4 md:w-5 md:h-5" />
+          </button>
+          <button onClick={quitToMenu} className="p-1.5 md:p-2 bg-neutral-800 hover:bg-red-900/60 rounded-full transition-colors text-red-400 hover:text-red-300 shadow-md" title="Restart Shift">
+            <RotateCcw className="w-4 h-4 md:w-5 md:h-5" />
+          </button>
+
+          <div className="flex gap-0.5 md:gap-1 hidden sm:flex ml-1 md:ml-2 border-l border-neutral-700 pl-2 md:pl-4">
+            {[...Array(5)].map((_, i) => (
+              <svg key={i} className={`w-4 h-4 md:w-6 md:h-6 ${i < reputation ? 'text-yellow-400 drop-shadow-[0_0_5px_rgba(250,204,21,0.5)]' : 'text-neutral-800'}`} fill="currentColor" viewBox="0 0 20 20">
+                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+              </svg>
+            ))}
+          </div>
+        </div>
+      </header>
+
+      {/* --- MENU STATE --- */}
+      {gameState === 'MENU' && !showGuide && !showLeaderboard && !showShop && !showRecipes && (
+        <div className="flex-1 flex items-center justify-center bg-neutral-900/90 absolute inset-0 z-50 backdrop-blur-sm">
+          <div className="text-center bg-neutral-900 p-8 rounded-3xl border border-neutral-800 shadow-[0_0_100px_rgba(249,115,22,0.15)] max-w-md w-full">
+            <Flame size={64} className="mx-auto text-orange-500 mb-4 animate-pulse" />
+            <h2 className="text-4xl font-black mb-2 tracking-tight">WOK STAR</h2>
+            <p className="text-neutral-400 mb-4 text-sm">Can you become the God of Cookery?</p>
+
+            <div className="flex justify-center gap-2 mb-6">
+              {['EASY', 'NORMAL', 'HARD'].map(d => (
+                <button
+                  key={d}
+                  onClick={() => setDifficulty(d)}
+                  className={`px-4 py-1.5 rounded-lg text-xs font-black uppercase tracking-widest transition-transform active:scale-95 border-b-2 ${difficulty === d ? 'bg-neutral-200 text-black border-neutral-400' : 'bg-neutral-800 text-neutral-500 border-neutral-900 hover:bg-neutral-700'}`}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex flex-col gap-3">
+              <button onClick={() => startGame('STORY')} className="w-full py-4 flex items-center justify-center gap-2 bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-500 hover:to-red-500 rounded-xl font-bold text-xl uppercase tracking-widest shadow-[0_0_20px_rgba(249,115,22,0.4)] transition-transform active:scale-95">
+                <BookOpen size={24} /> Story Campaign
+              </button>
+              <button onClick={() => startGame('ENDLESS')} className="w-full py-3 flex items-center justify-center gap-2 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-bold uppercase tracking-widest text-neutral-300 transition-transform active:scale-95">
+                <Play size={20} /> Endless Shift
+              </button>
+              <div className="flex gap-3 mt-2">
+                 <button onClick={() => setShowGuide(true)} className="flex-1 py-3 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-bold uppercase tracking-widest text-neutral-300 transition-transform active:scale-95 flex items-center justify-center gap-2 text-xs">
+                   <Info size={16} /> How to Play
+                 </button>
+                 <button onClick={() => setShowLeaderboard(true)} className="flex-1 py-3 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-bold uppercase tracking-widest text-yellow-500 transition-transform active:scale-95 flex items-center justify-center gap-2 text-xs">
+                   <Trophy size={16} /> Rankings
+                 </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- STORY CHAPTER OVERLAYS --- */}
+      {(gameState === 'STORY_CHAPTER' || gameState === 'EPILOGUE') && !showShop && !showRecipes && (
+        <div className="flex-1 flex items-center justify-center bg-neutral-950/95 absolute inset-0 z-50 p-4">
+           <div className={`text-center bg-neutral-900 p-8 md:p-12 rounded-3xl border-2 ${STORY_CHAPTERS[currentChapter].border} max-w-2xl w-full shadow-2xl relative overflow-hidden`}>
+            <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-transparent via-current to-transparent opacity-50" style={{ color: STORY_CHAPTERS[currentChapter].color }} />
+            
+            <h3 className={`text-lg md:text-xl font-bold mb-2 uppercase tracking-widest ${STORY_CHAPTERS[currentChapter].color}`}>
+               {gameState === 'EPILOGUE' ? 'CAMPAIGN COMPLETE' : 'STORY MODE'}
+            </h3>
+            <h2 className="text-3xl md:text-5xl font-black mb-6 text-white leading-tight">
+               {String(STORY_CHAPTERS[currentChapter].title)}
+            </h2>
+            
+            <p className="text-neutral-300 md:text-lg mb-8 leading-relaxed italic">
+               "{String(STORY_CHAPTERS[currentChapter].desc)}"
+            </p>
+            
+            {gameState !== 'EPILOGUE' && (
+              <div className="bg-black/50 p-4 rounded-xl border border-neutral-800 mb-8 inline-block text-left">
+                 <div className="text-xs text-neutral-500 uppercase tracking-widest mb-1 flex items-center justify-between gap-4">
+                   <span>Current Objective:</span>
+                   <span className={`text-[10px] font-black px-2 py-0.5 rounded-sm bg-black border border-current ${DIFF_MULTS[difficulty].color}`}>{difficulty}</span>
+                 </div>
+                 <div className="text-lg font-bold text-yellow-400 flex items-center gap-2">
+                   <Trophy size={20}/> 
+                   {(() => {
+                      const nextChap = STORY_CHAPTERS[currentChapter + 1];
+                      const nextTarget = nextChap ? (nextChap.target * DIFF_MULTS[difficulty].target).toFixed(0) : 0;
+                      return String(STORY_CHAPTERS[currentChapter].goal).replace(/\$[\d,]+/, `$${nextTarget}`);
+                   })()}
+                 </div>
+                 <div className="text-xs text-neutral-400 mt-2 italic">Lifetime Earnings: ${score.toFixed(2)}</div>
+              </div>
+            )}
+
+            <div className="flex gap-3">
+              <button onClick={() => setShowShop(true)} className={`w-1/3 py-4 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-bold text-lg md:text-xl uppercase tracking-widest text-orange-400 transition-transform active:scale-95 shadow-lg border border-neutral-700 flex items-center justify-center gap-2`}>
+                <ShoppingCart size={24} /> Shop
+              </button>
+              <button onClick={gameState === 'EPILOGUE' ? quitToMenu : continueStory} className={`flex-1 py-4 ${gameState === 'EPILOGUE' ? 'bg-fuchsia-600 hover:bg-fuchsia-500' : 'bg-orange-600 hover:bg-orange-500'} rounded-xl font-bold text-lg md:text-xl uppercase tracking-widest text-white transition-transform active:scale-95 shadow-lg`}>
+                {gameState === 'EPILOGUE' ? 'Return to Menu' : (currentChapter === 0 ? 'Start Prep Phase!' : 'Continue Campaign')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- PREP MINIGAME --- */}
+      {gameState === 'PREP' && !showShop && !showRecipes && (
+        <div className="flex-1 flex flex-col items-center justify-center bg-[#2c1e16] absolute inset-0 z-50 p-4 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-[#4a3221] to-[#1a120c]">
+           <div className="text-center mb-8">
+             <h2 className="text-4xl font-black text-orange-400 uppercase tracking-widest mb-2 drop-shadow-md">Mise en Place</h2>
+             <p className="text-neutral-300">Chop ingredients perfectly to earn a shift-long buff!</p>
+           </div>
+           
+           {prepItems.length > 0 && currentPrepIdx < prepItems.length && (
+             <div className="flex flex-col items-center bg-black/40 p-8 rounded-3xl border border-[#5c3e29] shadow-2xl w-full max-w-md">
+                
+                <div className="flex gap-2 mb-6">
+                   {prepItems.map((item, idx) => (
+                      <div key={idx} className={`w-12 h-12 flex items-center justify-center rounded-lg text-2xl bg-neutral-800 border-2 ${idx === currentPrepIdx ? 'border-orange-500 scale-110' : idx < currentPrepIdx ? 'border-green-500 opacity-50' : 'border-neutral-700 opacity-50'}`}>
+                         {String(ALL_ITEMS[item].icon)}
+                      </div>
+                   ))}
+                </div>
+
+                <div className="text-6xl mb-2 drop-shadow-[0_10px_10px_rgba(0,0,0,0.8)]">
+                  {String(ALL_ITEMS[prepItems[currentPrepIdx]].icon)}
+                </div>
+                <div className="text-xl font-bold text-white mb-8">
+                  {String(ALL_ITEMS[prepItems[currentPrepIdx]].name)} (Chop: {prepChops}/3)
+                </div>
+
+                {/* Timing Bar */}
+                <div className="w-full h-8 bg-neutral-900 rounded-full relative overflow-hidden border-2 border-neutral-700 shadow-inner">
+                   <div className="absolute top-0 bottom-0 left-[30%] right-[30%] bg-yellow-500/30 border-l border-r border-yellow-500/50"></div>
+                   <div className="absolute top-0 bottom-0 left-[42%] right-[42%] bg-green-500/60 border-l border-r border-green-400"></div>
+                   
+                   {/* Cursor */}
+                   <div 
+                     className="absolute top-0 bottom-0 w-2 bg-white rounded-full shadow-[0_0_10px_rgba(255,255,255,0.8)]"
+                     style={{ left: `${prepCursorPos}%`, transform: 'translateX(-50%)' }}
+                   ></div>
+                </div>
+
+                <div className="h-6 mt-4 font-bold tracking-widest text-lg" style={{ color: prepFeedback?.color || 'transparent' }}>
+                    {String(prepFeedback?.text || "...")}
+                </div>
+
+                <button 
+                  onPointerDown={handlePrepChop}
+                  className="mt-6 w-full py-4 bg-gradient-to-b from-orange-500 to-red-600 border-b-4 border-red-900 rounded-2xl font-black text-2xl uppercase tracking-widest text-white transition-transform active:scale-95 active:border-b-0 active:translate-y-1 shadow-lg flex items-center justify-center gap-2"
+                >
+                  <Crosshair /> CHOP!
+                </button>
+             </div>
+           )}
+        </div>
+      )}
+
+      {/* --- OVERLAYS --- */}
+      {showShop && (
+        <div className="flex-1 flex items-center justify-center bg-black/90 absolute inset-0 z-[100] p-4 backdrop-blur-md">
+          <div className="text-center bg-neutral-900 p-6 md:p-8 rounded-3xl border-2 border-yellow-700 max-w-3xl w-full shadow-2xl relative flex flex-col max-h-[90vh]">
+            <button onClick={() => setShowShop(false)} className="absolute top-4 right-4 text-neutral-400 hover:text-white">✕</button>
+            <h2 className="text-2xl md:text-4xl font-black text-yellow-500 mb-2 flex items-center justify-center gap-3"><ShoppingCart /> Kitchen Supplies</h2>
+            <div className="text-green-400 font-mono text-lg md:text-xl mb-6 bg-black/40 inline-block mx-auto px-4 py-2 rounded-full border border-green-900/50">
+               Wallet: ${Number(cash).toFixed(2)} <span className="text-xs text-neutral-500 ml-2">(Total Earned: ${Number(score).toFixed(2)})</span>
+            </div>
+            
+            <div className="overflow-y-auto custom-scrollbar flex-1 grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4 text-left px-2 pb-4">
+               {UPGRADES.map(u => {
+                  const isOwned = ownedUpgrades.includes(u.id);
+                  const canAfford = cash >= u.cost;
+                  return (
+                  <div key={u.id} className={`p-4 rounded-xl border-2 flex flex-col justify-between ${isOwned ? 'bg-green-900/20 border-green-700' : 'bg-neutral-800 border-neutral-700'}`}>
+                     <div className="flex items-start gap-3 mb-4">
+                        <div className="text-4xl drop-shadow-md">{String(u.icon)}</div>
+                        <div>
+                           <div className="font-bold text-white text-lg">{String(u.name)}</div>
+                           <div className="text-xs text-neutral-400 mt-1 leading-relaxed">{String(u.desc)}</div>
+                        </div>
+                     </div>
+                     <button 
+                        onClick={() => buyUpgrade(u)}
+                        disabled={isOwned || !canAfford}
+                        className={`w-full py-2.5 rounded-lg font-bold uppercase tracking-widest text-sm transition-transform ${isOwned ? 'bg-green-800/50 text-green-300 border border-green-700 cursor-not-allowed' : canAfford ? 'bg-yellow-600 hover:bg-yellow-50 text-neutral-950 active:scale-95' : 'bg-neutral-700 text-neutral-500 cursor-not-allowed'}`}
+                     >
+                        {isOwned ? 'Owned' : `Buy ($${u.cost.toFixed(2)})`}
+                     </button>
+                  </div>
+               )})}
+            </div>
+            
+            <button onClick={() => setShowShop(false)} className="mt-4 shrink-0 w-full py-4 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-bold uppercase tracking-widest text-white transition-transform active:scale-95">
+              Back to Kitchen
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showRecipes && !showShop && (
+        <div className="absolute inset-0 z-[100] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-neutral-900 border border-neutral-700 p-6 rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto text-left shadow-2xl relative custom-scrollbar">
+            <button onClick={() => setShowRecipes(false)} className="absolute top-4 right-4 text-neutral-400 hover:text-white text-xl font-bold">✕</button>
+            <h2 className="text-3xl font-black mb-6 text-green-400 flex items-center gap-2"><BookOpen /> Ledger & Recipes</h2>
+
+            <div className="space-y-8">
+              {/* Ingredients Table */}
+              <div>
+                <h3 className="text-xl font-bold text-white mb-3 border-b border-neutral-700 pb-2">Ingredient Costs</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                  {Object.values(ALL_ITEMS).sort((a,b) => a.cost - b.cost).map(item => (
+                    <div key={item.id} className="flex items-center justify-between bg-neutral-800 p-2.5 rounded-lg border border-neutral-700 shadow-inner">
+                      <div className="flex items-center gap-2">
+                        <span className="text-2xl drop-shadow-md">{String(item.icon)}</span>
+                        <span className="text-xs font-bold text-neutral-300 leading-tight">{String(item.name)}</span>
+                      </div>
+                      <span className="text-red-400 font-mono text-sm font-bold">-${item.cost.toFixed(2)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Recipes Table */}
+              <div>
+                <h3 className="text-xl font-bold text-white mb-3 border-b border-neutral-700 pb-2">Dish Economics</h3>
+                <div className="overflow-x-auto rounded-lg border border-neutral-700">
+                  <table className="w-full text-left border-collapse min-w-[600px]">
+                    <thead>
+                      <tr className="bg-neutral-800 text-neutral-400 text-xs uppercase tracking-widest border-b border-neutral-700">
+                        <th className="p-3">Dish</th>
+                        <th className="p-3">Ingredients Used</th>
+                        <th className="p-3 text-right">Cost</th>
+                        <th className="p-3 text-right">Base Price</th>
+                        <th className="p-3 text-right">Base Profit</th>
+                      </tr>
+                    </thead>
+                    <tbody className="text-sm">
+                      {RECIPES.map(recipe => {
+                        const cost = recipe.requires.reduce((sum, req) => sum + ALL_ITEMS[req].cost, 0);
+                        const profit = recipe.baseScore - cost;
+                        return (
+                          <tr key={recipe.id} className="border-b border-neutral-800/50 hover:bg-neutral-800 transition-colors">
+                            <td className="p-3 font-bold text-white flex items-center gap-2">
+                              <span className="text-xl drop-shadow-md">{String(recipe.displayIcons[0])}</span> {String(recipe.name)}
+                            </td>
+                            <td className="p-3">
+                              <div className="flex flex-wrap gap-1">
+                                {recipe.requires.map((req, i) => (
+                                  <span key={req + i} className="bg-black/30 p-1 rounded-md text-sm" title={ALL_ITEMS[req].name}>{String(ALL_ITEMS[req].icon)}</span>
+                                ))}
+                              </div>
+                            </td>
+                            <td className="p-3 text-right font-mono text-red-400 font-bold">-${cost.toFixed(2)}</td>
+                            <td className="p-3 text-right font-mono text-green-400 font-bold">${recipe.baseScore.toFixed(2)}</td>
+                            <td className="p-3 text-right font-mono text-yellow-400 font-bold">${profit.toFixed(2)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="text-xs text-neutral-500 mt-3 italic">* Note: Final profit varies greatly based on Wok Hei multiplier, speed tips, and hidden flavor combos!</p>
+              </div>
+            </div>
+            
+            <button onClick={() => setShowRecipes(false)} className="mt-8 w-full py-4 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-bold uppercase tracking-widest text-white transition-transform active:scale-95 shadow-lg border border-neutral-700">
+              Close Ledger
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showGuide && !showShop && !showRecipes && (
+        <div className="absolute inset-0 z-[100] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-neutral-900 border border-neutral-700 p-6 rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto text-left shadow-2xl relative custom-scrollbar">
+            <button onClick={() => setShowGuide(false)} className="absolute top-4 right-4 text-neutral-400 hover:text-white">✕</button>
+            <h2 className="text-3xl font-black mb-4 text-orange-500 flex items-center gap-2"><ChefHat /> How to Play & Win</h2>
+            <div className="space-y-4 text-neutral-300 text-sm">
+              <div>
+                <h3 className="text-lg font-bold text-white mb-1">1. The Basics</h3>
+                <p>Read incoming tickets. Add the required ingredients using the bottom station. Cook until the green bar is full, then hit <span className="text-green-400 font-bold">SERVE</span>.</p>
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-white mb-1">2. High Heat & Rhythm Tossing</h3>
+                <p>Control the fire with the left slider. High heat cooks fast but rapidly fills your <span className="text-red-500 font-bold">Burn</span> meter! <strong>Pro Tip: Tossing the food effectively pauses the burning process.</strong> Keep a steady tossing rhythm to safely juggle food on maximum heat.</p>
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-white mb-1">3. The Wok Hei Meter</h3>
+                <p>Tossing food while the heat is <span className="text-orange-400 font-bold">over 80</span> builds the purple <span className="text-fuchsia-400 font-bold">WOK HEI</span> meter on the right. Maximize this before serving for massive profit multipliers and perfect star ratings!</p>
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-white mb-1">4. Bulk Merging (High Risk/Reward)</h3>
+                <p>If two identical tickets appear, a flashing blue <span className="text-blue-400 font-bold">MERGE BULK</span> banner will appear. Click it to combine them! You must cook double the ingredients at once (max 25 items in the wok), but successfully serving a bulk order yields massive efficiency multipliers and huge tips!</p>
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-white mb-1">5. Economy & Soul</h3>
+                <p>Ingredients cost money, and spilling food out of the pan deducts cash instantly! Discover hidden <span className="text-yellow-400 font-bold">Flavor Combos</span> (e.g., Mushroom + Oyster Sauce + MSG) for huge bonuses. Or, hit <span className="text-cyan-400 font-bold">GIFT</span> to sacrifice your cash profit in exchange for rare Soul Points.</p>
+              </div>
+            </div>
+            <button onClick={() => setShowGuide(false)} className="mt-6 w-full py-3 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-bold uppercase tracking-widest text-white transition-transform active:scale-95">
+              Back to the Kitchen!
+            </button>
+          </div>
+        </div>
+      )}
+
+      {showLeaderboard && !showShop && !showRecipes && (
+        <div className="absolute inset-0 z-[100] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-neutral-900 border border-yellow-700 p-6 rounded-2xl max-w-lg w-full h-[80vh] flex flex-col shadow-[0_0_50px_rgba(234,179,8,0.2)] relative">
+            <button onClick={() => setShowLeaderboard(false)} className="absolute top-4 right-4 text-neutral-400 hover:text-white">✕</button>
+            <h2 className="text-3xl font-black mb-2 text-yellow-500 flex items-center justify-center gap-3">
+               <Trophy size={32} /> TOP WOK STARS
+            </h2>
+            <p className="text-center text-neutral-400 text-xs mb-4 uppercase tracking-widest">Global Rankings</p>
+            
+            <div className="flex-1 overflow-y-auto space-y-2 pr-2 custom-scrollbar">
+              {leaderboard.length === 0 ? (
+                 <div className="text-center text-neutral-500 mt-10">Waiting for first scores...</div>
+              ) : (
+                leaderboard.map((entry, idx) => (
+                  <div key={entry.id} className={`p-3 rounded-lg flex items-center justify-between border ${user && entry.userId === user.uid ? 'bg-yellow-900/30 border-yellow-600' : 'bg-neutral-800 border-neutral-700'}`}>
+                    <div className="flex items-center gap-3">
+                      <div className="text-xl font-black text-neutral-500 w-6">{idx + 1}.</div>
+                      <div>
+                        <div className="font-bold text-white flex items-center gap-1">
+                          <User size={14} className="text-neutral-400" /> {String(entry.name || 'Anonymous')}
+                        </div>
+                        <div className="text-[10px] text-neutral-400 uppercase">{String(entry.title || '')}</div>
+                      </div>
+                    </div>
+                    <div className="font-mono text-green-400 font-bold text-lg">${Number(entry.score || 0).toFixed(2)}</div>
+                  </div>
+                ))
+              )}
+            </div>
+            
+            <button onClick={() => setShowLeaderboard(false)} className="mt-4 w-full py-3 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-bold uppercase tracking-widest text-white transition-transform active:scale-95">
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* --- OPTIONS OVERLAY --- */}
+      {showOptions && !showShop && !showRecipes && (
+        <div className="absolute inset-0 z-[100] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-neutral-900 border border-neutral-700 p-6 rounded-2xl max-w-sm w-full shadow-2xl relative">
+            <button onClick={() => setShowOptions(false)} className="absolute top-4 right-4 text-neutral-400 hover:text-white">✕</button>
+            <h2 className="text-2xl font-black mb-6 text-blue-400 flex items-center justify-center gap-2"><Settings /> OPTIONS</h2>
+            
+            <div className="space-y-6 mb-8">
+              <div>
+                <div className="flex justify-between text-neutral-300 font-bold mb-2">
+                  <span>SFX Volume</span>
+                  <span>{sfxVol}%</span>
+                </div>
+                <input 
+                  type="range" min="0" max="100" value={sfxVol} 
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value);
+                    setSfxVol(val);
+                    setSfxVolume(val / 100);
+                  }}
+                  className="w-full accent-blue-500" 
+                />
+              </div>
+
+              <div>
+                <div className="flex justify-between text-neutral-300 font-bold mb-2">
+                  <span>Music Volume</span>
+                  <span>{musicVol}%</span>
+                </div>
+                <input 
+                  type="range" min="0" max="100" value={musicVol} 
+                  onChange={(e) => {
+                    const val = parseInt(e.target.value);
+                    setMusicVol(val);
+                    setMusicVolume(val / 100);
+                  }}
+                  className="w-full accent-blue-500" 
+                />
+              </div>
+            </div>
+
+            <button onClick={() => setShowOptions(false)} className="w-full py-3 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-bold uppercase tracking-widest text-white transition-transform active:scale-95">
+              Close
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* --- GAME OVER STATE --- */}
+      {gameState === 'GAMEOVER' && !showGuide && !showLeaderboard && !showShop && !showRecipes && (
+        <div className="flex-1 flex items-center justify-center bg-neutral-950/95 absolute inset-0 z-50">
+           <div className="text-center bg-neutral-900 p-8 rounded-3xl border border-red-900 max-w-md w-full shadow-2xl relative overflow-hidden">
+            <AlertTriangle size={50} className="mx-auto text-red-500 mb-2" />
+            <h2 className="text-3xl font-black mb-1 text-red-500 tracking-widest">KITCHEN CLOSED</h2>
+            <p className="text-neutral-400 text-sm mb-4">You ruined your 5-star reputation!</p>
+            
+            <div className="bg-black/50 p-4 rounded-xl border border-neutral-800 mb-6">
+               <div className="text-sm text-neutral-400 uppercase tracking-widest mb-1">Final Earnings</div>
+               <div className="text-6xl font-mono text-green-400 mb-2">${Number(score).toFixed(2)}</div>
+               <div className="text-xs text-neutral-500 uppercase tracking-widest mt-2">Rank Achieved:</div>
+               <div className={`text-xl font-black ${finalTitle.color} mt-1 drop-shadow-md`}>{String(finalTitle.title)}</div>
+               
+               {soul > 0 && (
+                 <div className="text-sm font-bold text-cyan-400 mt-3 flex items-center justify-center gap-1">
+                   <Heart size={16} fill="currentColor" /> {soul} Soul Collected
+                 </div>
+               )}
+            </div>
+
+            {!scoreSubmitted && score > 0 ? (
+              <div className="flex flex-col gap-2 mb-6 bg-neutral-800/50 p-4 rounded-xl border border-neutral-700">
+                <label className="text-xs font-bold text-yellow-500 uppercase tracking-widest text-left ml-1">Chef Name:</label>
+                <input 
+                  type="text" 
+                  placeholder="Enter Name..." 
+                  value={playerName} 
+                  onChange={e => setPlayerName(e.target.value)} 
+                  maxLength={15} 
+                  className="w-full p-3 rounded-lg bg-neutral-950 text-white border border-neutral-600 outline-none font-bold" 
+                />
+                <button onClick={submitScoreToLeaderboard} disabled={!playerName.trim()} className="w-full py-3 bg-yellow-600 hover:bg-yellow-500 disabled:bg-neutral-700 text-neutral-950 rounded-lg font-bold uppercase transition-all">Submit Score</button>
+              </div>
+            ) : null}
+
+            <button onClick={quitToMenu} className="w-full py-3 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-bold uppercase tracking-widest text-white transition-transform active:scale-95">Main Menu</button>
+          </div>
+        </div>
+      )}
+
+      {/* --- STREAK POPUP (VFX) --- */}
+      {streakPopup && (
+        <div key={streakPopup.id} className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 z-[100] animate-streak pointer-events-none whitespace-nowrap" style={{ color: String(streakPopup.color) }}>
+          <h1 className="text-6xl md:text-8xl font-black italic tracking-tighter drop-shadow-[0_10px_20px_rgba(0,0,0,0.8)] uppercase">
+            {String(streakPopup.text)}
+          </h1>
+        </div>
+      )}
+
+      {/* --- MAIN GAMEPLAY UI --- */}
+      <main className="flex-1 flex flex-col relative min-h-0" style={{ backgroundColor: '#0a0a0a' }}>
+        <div className="absolute top-1/4 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-50 pointer-events-none flex flex-col items-center gap-2">
+          {notifications.map(n => (
+            <div key={n.id} className={`px-4 py-2 rounded-full font-bold text-lg animate-bounce shadow-xl ${n.type === 'error' ? 'bg-red-600 text-white' : n.type === 'success' ? 'bg-green-500 text-neutral-900' : 'bg-neutral-700 text-white'}`}>
+              {String(n.msg)}
+            </div>
+          ))}
+        </div>
+
+        {/* --- TICKET RAIL --- */}
+        <div className="flex flex-col w-full z-10 relative">
+          
+          {duplicateNames.length > 0 ? (
+             <div className="w-full bg-blue-900 border-b border-blue-700 py-1 px-4 flex justify-center items-center gap-2 md:gap-4 text-[10px] md:text-sm tracking-widest uppercase text-white shadow-[0_0_15px_rgba(59,130,246,0.5)]">
+                 <span className="animate-pulse text-blue-200">Duplicates Detected!</span>
+                 <button onClick={() => handleMergeOrders(duplicateNames[0])} className="bg-yellow-500 hover:bg-yellow-400 text-black font-black px-2 md:px-4 py-0.5 md:py-1 rounded shadow-lg active:scale-95 transition-transform flex items-center gap-1 border-b-2 border-yellow-700 active:border-b-0 active:translate-y-px">
+                     MERGE BULK {String(duplicateNames[0]).toUpperCase()}
+                 </button>
+             </div>
+          ) : (
+             <div className={`w-full bg-neutral-950/80 border-b border-[#111] py-1 px-4 flex justify-center items-center text-xs md:text-sm tracking-widest uppercase transition-colors duration-300 ${dynPrompt.color}`}>
+                {String(dynPrompt.text)}
+             </div>
+          )}
+
+          <div className={`shrink-0 bg-[#1a1a1c] border-b-4 border-[#111] flex overflow-x-auto shadow-inner custom-scrollbar ${viewport.isLandscape ? 'h-16 md:h-24 p-1.5 md:p-2 gap-2 md:gap-3' : 'h-24 md:h-28 p-2 md:p-3 gap-3 md:gap-4'}`}>
+            <button onClick={forceNextOrder} disabled={orders.length >= 3} className={`h-full flex flex-col items-center justify-center border-2 border-dashed border-neutral-700 rounded-lg text-neutral-500 hover:text-white transition-all shrink-0 ${viewport.isLandscape ? 'min-w-[60px] md:min-w-[80px]' : 'min-w-[70px] md:min-w-[90px]'}`}>
+              <Plus className={`${viewport.isLandscape ? 'w-4 h-4 md:w-6 md:h-6' : 'w-6 h-6 md:w-8 md:h-8'}`} />
+              <span className="text-[8px] md:text-[10px] uppercase font-bold text-center leading-tight">Next</span>
+            </button>
+
+            {orders.map(order => {
+              const urgency = order.timeLeft / order.timeLimit;
+              const isSpecial = !!order.specialEvent;
+              const isMerged = !!order.isMerged;
+              const ticketColor = order.failed ? 'bg-red-950 border-red-800 text-red-400' : 
+                                  isMerged ? 'bg-blue-900 border-blue-400 text-blue-100 shadow-[0_0_15px_rgba(59,130,246,0.3)]' :
+                                  urgency < 0.25 ? 'bg-red-100 border-red-500 text-red-900 animate-pulse' : 
+                                  isSpecial ? order.specialEvent.color :
+                                  urgency < 0.5 ? 'bg-yellow-50 border-yellow-400 text-yellow-900' : 'bg-white border-neutral-300 text-neutral-900';
+              return (
+                <div key={order.id} className={`rounded-lg shadow-lg border-2 ${ticketColor} relative flex flex-row items-center shrink-0 ${viewport.isLandscape ? 'min-w-[160px] md:min-w-[220px] p-1.5 md:p-2 gap-1.5 md:gap-3' : 'min-w-[180px] md:min-w-[260px] p-2 md:p-2.5 gap-2 md:gap-3'}`}>
+                  {isSpecial && !order.failed && !isMerged && (
+                     <div className="absolute -top-3 -right-3 md:-top-4 md:-right-4 bg-black text-white text-[7px] md:text-[9px] font-black px-1.5 md:px-2 py-0.5 md:py-1 rounded-full border border-current z-20 flex items-center gap-1 shadow-lg transform rotate-6 whitespace-nowrap">
+                        <span>{String(order.specialEvent.icon)}</span> {String(order.specialEvent.name)}
+                     </div>
+                  )}
+                  {isMerged && !order.failed && (
+                     <div className="absolute -top-3 -right-3 md:-top-4 md:-right-4 bg-yellow-500 text-black text-[7px] md:text-[9px] font-black px-2 py-0.5 md:py-1 rounded-full border border-black z-20 flex items-center gap-1 shadow-lg transform rotate-6 whitespace-nowrap">
+                        BULK x{order.batchSize}
+                     </div>
+                  )}
+                  <DishIcon type={order.dishType} icons={order.displayIcons} isLandscape={viewport.isLandscape} />
+                  <div className="flex flex-col justify-center min-w-0 flex-1 text-left">
+                    <div className={`font-bold leading-tight truncate w-full ${viewport.isLandscape ? 'text-[9px] md:text-xs mb-0' : 'text-[11px] md:text-sm lg:text-base mb-1'}`}>{String(order.name)}</div>
+                    <div className={`flex flex-wrap bg-black/10 rounded-md w-full ${viewport.isLandscape ? 'gap-0.5 mt-0 px-1 py-0.5' : 'gap-1 mt-0.5 md:mt-1 px-1.5 py-1'}`}>
+                      {order.requires.map((req, i) => (
+                        <span key={req + i} className={`${viewport.isLandscape ? 'text-[10px] md:text-xs' : 'text-xs md:text-sm'} drop-shadow-md leading-none`} title={ALL_ITEMS[req].name}>{String(ALL_ITEMS[req].icon)}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="absolute bottom-0 left-0 right-0 h-1 md:h-1.5 bg-black/20 overflow-hidden rounded-b-lg">
+                    <div className={`h-full ${urgency < 0.25 ? 'bg-red-500' : isMerged ? 'bg-blue-400' : 'bg-green-500'}`} style={{ width: `${Math.max(0, urgency * 100)}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* --- MIDDLE ACTION STATION (KITCHEN) --- */}
+       <div className={`flex flex-1 min-h-0 min-w-0 justify-between items-center relative ${viewport.isLandscape ? 'px-1 md:px-4 py-1 md:py-2' : 'px-2 md:px-8 lg:px-16 py-2 md:py-4'}`}>
+            
+          {/* Left Column: Heat & Oil */}
+          <div className={`flex flex-row justify-center gap-1.5 md:gap-3 h-full z-20 shrink-0 ${viewport.isLandscape ? 'w-28 md:w-40 max-h-[90%]' : 'w-32 md:w-48 max-h-80 md:max-h-[650px] lg:max-h-[700px]'}`}>
+            
+            {/* Heat Slider */}
+            <div className={`w-1/2 bg-neutral-900 rounded-full flex flex-col items-center border border-neutral-800 relative flex-1 min-h-0 py-4 md:py-8`}>
+              <div className={`font-black text-[8px] md:text-xs mb-2 md:mb-6 z-10 pointer-events-none transition-colors ${heatLevel > 80 ? 'text-red-500 animate-pulse' : 'text-neutral-500'}`}>HEAT</div>
+              <div className="relative flex-1 w-full flex justify-center cursor-ns-resize touch-none" onPointerDown={handleHeatPointer} onPointerMove={handleHeatPointer}>
+                <div className="w-2 md:w-3 h-full bg-black rounded-full overflow-hidden relative shadow-inner pointer-events-none">
+                  <div className={`absolute bottom-0 w-full transition-all duration-100 bg-gradient-to-t ${heatLevel > 80 ? 'from-red-600 to-orange-400' : 'from-orange-500 to-yellow-400'}`} style={{ height: `${heatLevel}%` }} />
+                </div>
+                <div className={`w-10 md:w-16 h-8 md:h-12 bg-neutral-200 rounded-lg absolute z-10 pointer-events-none transition-transform flex items-center justify-center shadow-lg ${heatLevel > 80 ? 'border-2 border-red-500 bg-white scale-110' : 'border-b-4 border-neutral-400'}`} style={{ bottom: `calc(${heatLevel}% - 16px)` }}>
+                   <div className="flex flex-col gap-1 md:gap-1.5 opacity-40">
+                      <div className="w-5 md:w-8 h-0.5 md:h-1 bg-neutral-800 rounded-full"></div>
+                      <div className="w-5 md:w-8 h-0.5 md:h-1 bg-neutral-800 rounded-full"></div>
+                      <div className="w-5 md:w-8 h-0.5 md:h-1 bg-neutral-800 rounded-full"></div>
+                   </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Oil Squeeze Bottle */}
+            <div className={`w-1/2 bg-neutral-900/60 rounded-full flex flex-col items-center border border-yellow-900/50 relative flex-1 min-h-0 py-4 md:py-8 shadow-[inset_0_0_20px_rgba(234,179,8,0.05)]`}>
+              <div className={`font-black text-[8px] md:text-xs mb-2 md:mb-6 z-10 pointer-events-none transition-colors ${oilLevel < 20 ? 'text-red-500 animate-pulse' : oilLevel > 75 ? 'text-orange-400' : 'text-yellow-500'}`}>OIL</div>
+              <div className="relative flex-1 w-full flex justify-center">
+                <div className="w-2 md:w-3 h-full bg-black rounded-full overflow-hidden relative shadow-inner">
+                  <div className={`absolute bottom-0 w-full transition-all duration-100 bg-gradient-to-t from-yellow-600 to-yellow-300 ${oilLevel > 75 ? 'animate-pulse' : ''}`} style={{ height: `${oilLevel}%` }} />
+                </div>
+              </div>
+              
+              {/* Squeeze Action Button */}
+              <button 
+                 onPointerDown={() => setIsOiling(true)} 
+                 onPointerUp={() => setIsOiling(false)} 
+                 onPointerLeave={() => setIsOiling(false)} 
+                 className={`absolute bottom-2 md:bottom-4 w-10 md:w-16 h-10 md:h-16 rounded-full flex items-center justify-center transition-all shadow-xl border-b-4 active:border-b-0 active:translate-y-1 ${oilLevel < 20 ? 'bg-red-900 border-red-950 animate-pulse' : oilLevel > 75 ? 'bg-orange-800 border-orange-950' : 'bg-yellow-600 border-yellow-800 hover:bg-yellow-500'}`}
+              >
+                  <Droplets className={`w-4 h-4 md:w-6 md:h-6 ${oilLevel < 20 ? 'text-red-400' : 'text-yellow-100'}`} />
+              </button>
+            </div>
+
+          </div>
+
+          <div className="flex-1 h-full min-h-0 min-w-0 flex flex-col items-center justify-center relative mx-1 md:mx-2">
+            <div className="absolute top-0 w-full flex justify-between px-2 md:px-8 z-20 pointer-events-none transition-opacity duration-300" style={{ opacity: wokContents.length > 0 ? 1 : 0}}>
+              <div className={`w-20 md:w-40 bg-black/60 rounded-lg border border-neutral-800 backdrop-blur-md ${viewport.isLandscape ? 'p-1.5 md:p-2' : 'p-2 md:p-3'}`}>
+                <div className="flex justify-between text-[8px] md:text-xs mb-0.5 md:mb-1 font-bold uppercase tracking-wider text-neutral-400">
+                  <span>Cook</span>
+                  <span className={cookProgress > 90 ? 'text-green-400' : 'text-white'}>{Math.floor(cookProgress)}%</span>
+                </div>
+                <div className="h-1 md:h-2 bg-neutral-900 rounded-full overflow-hidden">
+                  <div className="h-full bg-green-500 transition-all duration-100" style={{ width: `${cookProgress}%` }} />
+                </div>
+              </div>
+
+              <div className={`w-20 md:w-40 bg-black/60 rounded-lg border border-neutral-800 backdrop-blur-md ${viewport.isLandscape ? 'p-1.5 md:p-2' : 'p-2 md:p-3'}`}>
+                <div className="flex justify-between text-[8px] md:text-xs mb-0.5 md:mb-1 font-bold uppercase tracking-wider text-neutral-400">
+                  <span>Burn</span>
+                  <span className={burnProgress > 75 ? 'text-red-500 animate-pulse' : 'text-white'}>{Math.floor(burnProgress)}%</span>
+                </div>
+                <div className="h-1 md:h-2 bg-neutral-900 rounded-full overflow-hidden">
+                  <div className="h-full bg-red-600 transition-all duration-100" style={{ width: `${burnProgress}%` }} />
+                </div>
+              </div>
+            </div>
+
+            <div className={`absolute right-0 transform -translate-y-1/2 flex flex-col items-center z-20 ${viewport.isLandscape ? 'top-[60%]' : 'top-1/2'}`}>
+              <div 
+                className={`text-[8px] md:text-[10px] font-black mb-1 md:mb-2 text-fuchsia-500 tracking-widest ${wokHei > 80 ? 'animate-pulse drop-shadow-[0_0_5px_rgba(217,70,239,0.8)]' : 'opacity-50'}`} 
+                style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+              >
+                WOK HEI
+              </div>
+              <div className={`bg-black/50 border border-neutral-800 rounded-full overflow-hidden shadow-2xl flex flex-col justify-end backdrop-blur-sm transition-colors ${viewport.isLandscape ? 'w-4 md:w-8 h-32 md:h-64' : 'w-6 md:w-10 h-48 md:h-80'} ${wokHei > 80 ? 'border-fuchsia-500/50 shadow-[0_0_30px_rgba(217,70,239,0.4)]' : ''}`}>
+                <div className="w-full transition-all duration-200 bg-gradient-to-t from-indigo-900 to-fuchsia-400 relative" style={{ height: `${wokHei}%` }}>
+                  {wokHei > 80 && <div className="absolute inset-0 bg-white/20 animate-pulse" />}
+                </div>
+              </div>
+            </div>
+
+            <canvas ref={canvasRef} width={400} height={400} className="w-full h-full max-w-[65vw] md:max-w-none object-contain block drop-shadow-2xl z-10" />
+          </div>
+
+          {/* Right Column: Rockers & Serve */}
+          <div className={`flex flex-col justify-center z-20 shrink-0 h-full ${viewport.isLandscape ? 'gap-1.5 w-20 md:w-28 max-h-[90%]' : 'gap-2 md:gap-4 w-20 md:w-32 max-h-72 md:max-h-[550px] lg:max-h-[600px]'}`}>
+            
+            {/* 2D Elliptical Toss Pad */}
+            <div className={`flex flex-col flex-1 bg-neutral-900/80 rounded-[40px] border border-blue-900/50 relative shadow-[inset_0_0_20px_rgba(59,130,246,0.05)] min-h-0 py-4 md:py-6 px-1.5 md:px-3`}>
+                <div className={`font-black text-[8px] md:text-xs mb-1 md:mb-2 z-10 pointer-events-none text-center transition-colors ${toss.x !== 0 || toss.y !== 0 ? 'text-blue-400 drop-shadow-[0_0_5px_rgba(96,165,250,0.8)]' : 'text-neutral-500'}`}>TOSS</div>
+                
+                <div 
+                   className="relative flex-1 w-full flex justify-center items-center cursor-move touch-none"
+                   onPointerDown={handleTossPointer}
+                   onPointerMove={handleTossPointer}
+                   onPointerUp={handleTossRelease}
+                   onPointerLeave={handleTossRelease}
+                >
+                    {/* The elliptical track boundary */}
+                    <div className="w-full h-[90%] bg-black/50 rounded-[40px] overflow-hidden relative shadow-inner border-2 border-neutral-800 pointer-events-none">
+                        {/* Center Crosshairs */}
+                        <div className="absolute top-1/2 w-full h-px bg-neutral-700/50 transform -translate-y-1/2"></div>
+                        <div className="absolute left-1/2 h-full w-px bg-neutral-700/50 transform -translate-x-1/2"></div>
+                    </div>
+                    
+                    {/* The Thumb Grip */}
+                    <div 
+                       className={`w-10 md:w-14 h-10 md:h-14 bg-neutral-200 rounded-full absolute z-10 pointer-events-none transition-transform flex items-center justify-center shadow-[0_10px_20px_rgba(0,0,0,0.5)] border-b-4 border-neutral-400`}
+                       style={{ 
+                           left: `calc(50% + ${toss.x * 35}%)`, 
+                           top: `calc(50% + ${toss.y * 35}%)`, 
+                           transform: `translate(-50%, -50%) scale(${toss.x === 0 && toss.y === 0 ? 1 : 1.15})` 
+                       }}
+                    >
+                        <div className="w-4 md:w-6 h-4 md:w-6 bg-blue-500 rounded-full opacity-60 shadow-[inset_0_2px_4px_rgba(255,255,255,0.8)]"></div>
+                    </div>
+                </div>
+            </div>
+
+            {/* Standardized 2x2 Tactile Action Grid (Forced equal widths) */}
+            <div className={`grid grid-cols-2 w-full shrink-0 ${viewport.isLandscape ? 'gap-1 h-12 md:h-14' : 'gap-1 md:gap-2 h-14 md:h-16'}`}>
+              <button onClick={handleTrash} className="w-full h-full bg-neutral-800 hover:bg-neutral-700 border-black border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-red-500 flex flex-col items-center justify-center transition-all text-[8px] md:text-[10px] shadow-lg tracking-wider overflow-hidden">
+                <Trash2 className="w-4 h-4 md:w-5 md:h-5 mb-0.5 shrink-0" /> TRASH
+              </button>
+              <button onPointerDown={() => { if(wokContents.length === 0) setIsCleaning(true); }} onPointerUp={handleCleanRelease} onPointerLeave={handleCleanRelease} disabled={wokContents.length > 0} className="w-full h-full bg-blue-800 hover:bg-blue-700 border-blue-950 border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-white flex flex-col items-center justify-center transition-all text-[8px] md:text-[10px] disabled:opacity-30 shadow-lg tracking-wider overflow-hidden">
+                <Droplets className="w-4 h-4 md:w-5 md:h-5 mb-0.5 shrink-0" /> CLEAN
+              </button>
+            </div>
+            
+            <div className={`grid grid-cols-2 w-full shrink-0 ${viewport.isLandscape ? 'gap-1 h-12 md:h-14' : 'gap-1 md:gap-2 h-14 md:h-16'}`}>
+                <button onClick={() => serveDish(true)} className={`w-full h-full bg-cyan-800 hover:bg-cyan-700 border-cyan-950 border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-cyan-100 flex flex-col items-center justify-center transition-all shadow-xl text-[8px] md:text-[10px] tracking-wider overflow-hidden`}>
+                  <Heart className="w-4 h-4 md:w-5 md:h-5 mb-0.5 shrink-0" /> GIFT
+                </button>
+                <button onClick={() => serveDish(false)} className={`w-full h-full bg-green-600 hover:bg-green-500 border-green-900 border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-white flex flex-col items-center justify-center transition-all shadow-xl text-[8px] md:text-[10px] tracking-wider overflow-hidden`}>
+                  <CheckCircle className="w-4 h-4 md:w-5 md:h-5 mb-0.5 shrink-0" /> SERVE
+                </button>
+            </div>
+
+          </div>
+        </div>
+
+        {/* --- INGREDIENT STATION --- */}
+        <div className={`shrink-0 bg-[#151517] border-t-4 border-[#0a0a0c] w-full z-20 relative shadow-[0_-10px_30px_rgba(0,0,0,0.8)] ${viewport.isLandscape ? 'p-1' : 'p-2'}`}>
+          <div className="flex flex-wrap justify-center items-stretch gap-1 md:gap-2 max-w-7xl mx-auto">
+            {CATEGORIES.map(cat => (
+              <div key={cat.id} className="flex flex-col bg-neutral-900/40 rounded-xl p-1 md:p-1.5 border border-neutral-800/60 shadow-inner">
+                <div className="text-[7px] md:text-[9px] text-neutral-500 font-black uppercase tracking-widest text-center mb-1">
+                  {cat.name}
+                </div>
+                <div className="flex flex-wrap justify-center gap-1 md:gap-1.5">
+                  {cat.items.map(itemId => {
+                    const item = ALL_ITEMS[itemId];
+                    return (
+                      <button 
+                        key={item.id} 
+                        onClick={() => addIngredient(item.id)} 
+                        disabled={!isUnlocked(item.id) || wokContents.length >= 25 || burnProgress >= 100} 
+                        className={`rounded-lg flex flex-col items-center justify-center transition-all ${item.color} ${item.text || 'text-neutral-900'} border-b-2 md:border-b-4 border-black/30 shadow-md ${viewport.isLandscape ? 'w-[32px] md:w-[48px] h-8 md:h-12' : 'w-[40px] md:w-[56px] h-10 md:h-14'} ${!isUnlocked(item.id) ? 'opacity-20 grayscale' : 'disabled:opacity-30 disabled:grayscale hover:brightness-110 active:border-b-0 active:translate-y-1'}`}
+                      >
+                        <span className={`${viewport.isLandscape ? 'text-lg md:text-2xl' : 'text-xl md:text-3xl'} leading-none filter drop-shadow-sm`}>
+                          {String(item.icon)}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
