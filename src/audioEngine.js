@@ -230,42 +230,50 @@ export const playTrash = () => {
 
 export const playTossShhh = () => {
   if (!audioCtx) return;
+  const now = audioCtx.currentTime;
+  if (playTossShhh.lastPlayedAt != null && now - playTossShhh.lastPlayedAt < 0.22) return;
+  playTossShhh.lastPlayedAt = now;
+
   const noise = audioCtx.createBufferSource();
   noise.buffer = getNoiseBuffer();
   const filter = audioCtx.createBiquadFilter();
   const gain = audioCtx.createGain();
-  
+
   filter.type = 'bandpass';
-  filter.frequency.setValueAtTime(2500, audioCtx.currentTime);
-  filter.Q.value = 0.5;
-  gain.gain.setValueAtTime(0, audioCtx.currentTime);
-  gain.gain.linearRampToValueAtTime(0.25, audioCtx.currentTime + 0.1);
-  gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
+  filter.frequency.setValueAtTime(1800, now);
+  filter.Q.value = 0.4;
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(0.1, now + 0.03);
+  gain.gain.exponentialRampToValueAtTime(0.008, now + 0.28);
 
   noise.connect(filter);
   filter.connect(gain);
   gain.connect(sfxGain);
-  
-  noise.start(); noise.stop(audioCtx.currentTime + 0.4);
+
+  noise.start(now);
+  noise.stop(now + 0.28);
 };
+playTossShhh.lastPlayedAt = null;
 
 export const playFoodImpact = () => {
   if (!audioCtx) return;
   const now = audioCtx.currentTime;
-  
+
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
-  
+
   osc.type = 'sine';
-  osc.frequency.setValueAtTime(200, now);
-  osc.frequency.exponentialRampToValueAtTime(50, now + 0.05);
-  gain.gain.setValueAtTime(0.05, now);
-  gain.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
-  
+  osc.frequency.setValueAtTime(180, now);
+  osc.frequency.exponentialRampToValueAtTime(60, now + 0.06);
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(0.04, now + 0.008);
+  gain.gain.exponentialRampToValueAtTime(0.006, now + 0.06);
+
   osc.connect(gain);
   gain.connect(sfxGain);
-  
-  osc.start(); osc.stop(now + 0.05);
+
+  osc.start(now);
+  osc.stop(now + 0.06);
 };
 
 export const playIngredientAdd = (ingId) => {

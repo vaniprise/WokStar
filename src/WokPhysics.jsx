@@ -28,6 +28,11 @@ const getBounciness = (f) => {
   return 0.35;
 };
 
+// Performance: when food body count exceeds this, reduce particles/collision to keep 60fps
+const BODY_COUNT_PERF_THRESHOLD = 14;
+const MAX_COLLISION_PAIRS_PER_FRAME = 90;
+const FIRE_CAP_HIGH_LOAD = 70;
+const PARTICLE_CAP_TOTAL = 380;
 const WokPhysics = forwardRef(function WokPhysics(
   {
     heatLevel = 0, isCleaning = false, waterLevel = 0, waterDirtiness = 0,
@@ -128,6 +133,7 @@ const WokPhysics = forwardRef(function WokPhysics(
     const wokCenterX = CW / 2;
     const wokCenterY = CH / 2 + 30;
     const wokRadius = 140;
+    const innerRadius = wokRadius - 16;
 
     let metalTemp = 0;
     let lastTime = performance.now();
@@ -205,17 +211,6 @@ const WokPhysics = forwardRef(function WokPhysics(
             size: f.size * 0.4 + Math.random() * 3,
           });
         });
-        s.oilParticles.forEach(p => {
-          s.particles.push({
-            type: 'splash',
-            color: 'rgba(200, 160, 40, 0.6)',
-            x: p.x, y: p.y,
-            vx: 18 + Math.random() * 15,
-            vy: -10 - Math.random() * 12,
-            life: 1, maxLife: 25 + Math.random() * 15,
-            size: 2 + Math.random() * 3,
-          });
-        });
         s.foodBodies = [];
         s.oilParticles = [];
         s.wokContents = [];
@@ -243,22 +238,22 @@ const WokPhysics = forwardRef(function WokPhysics(
         const sa = serveAnim;
 
         if (sa.phase === 0) {
-          // Plate slides in from the right
-          sa.plateX += (sa.plateTargetX - sa.plateX) * 0.25 * dt;
-          sa.tiltAmount += (0.4 - sa.tiltAmount) * 0.15 * dt;
-          if (Math.abs(sa.plateX - sa.plateTargetX) < 3 || sa.timer > 20) {
+          // Plate slides in from the right (slowed)
+          sa.plateX += (sa.plateTargetX - sa.plateX) * 0.1 * dt;
+          sa.tiltAmount += (0.4 - sa.tiltAmount) * 0.07 * dt;
+          if (Math.abs(sa.plateX - sa.plateTargetX) < 3 || sa.timer > 45) {
             sa.plateX = sa.plateTargetX;
             sa.phase = 1;
             sa.timer = 0;
           }
         } else if (sa.phase === 1) {
-          // Pour food onto plate
-          sa.tiltAmount += (0.5 - sa.tiltAmount) * 0.2 * dt;
+          // Pour food onto plate (slowed)
+          sa.tiltAmount += (0.5 - sa.tiltAmount) * 0.1 * dt;
           const plateTopY = wokCenterY + wokRadius * 0.6;
 
-          // Move food bodies onto plate
+          // Move food bodies onto plate (slower pour rate)
           if (s.foodBodies.length > 0) {
-            const pourRate = Math.max(2, Math.ceil(s.foodBodies.length * 0.5));
+            const pourRate = Math.max(1, Math.ceil(s.foodBodies.length * 0.25));
             for (let k = 0; k < pourRate && s.foodBodies.length > 0; k++) {
               const f = s.foodBodies.pop();
               const tx = sa.plateTargetX + (Math.random() - 0.5) * 50;
@@ -280,23 +275,13 @@ const WokPhysics = forwardRef(function WokPhysics(
               }
             }
           }
-          // Move oil particles too
-          while (s.oilParticles.length > 0) {
-            const p = s.oilParticles.pop();
-            sa.servedOil.push({
-              x: p.x, y: p.y,
-              targetX: sa.plateTargetX + (Math.random() - 0.5) * 40,
-              targetY: plateTopY - Math.random() * 8,
-              landed: false,
-            });
-          }
-
-          // Animate served food toward plate using lerp
+          // Served oil: none (oil is puddle only)
+          // Animate served food toward plate using lerp (slowed)
           let allLanded = true;
           sa.servedFood.forEach(sf => {
             if (!sf.landed) {
-              sf.x += (sf.targetX - sf.x) * 0.2 * dt;
-              sf.y += (sf.targetY - sf.y) * 0.2 * dt;
+              sf.x += (sf.targetX - sf.x) * 0.09 * dt;
+              sf.y += (sf.targetY - sf.y) * 0.09 * dt;
               const dx = sf.targetX - sf.x;
               const dy = sf.targetY - sf.y;
               if (dx * dx + dy * dy < 9) {
@@ -310,8 +295,8 @@ const WokPhysics = forwardRef(function WokPhysics(
           });
           sa.servedOil.forEach(so => {
             if (!so.landed) {
-              so.x += (so.targetX - so.x) * 0.25 * dt;
-              so.y += (so.targetY - so.y) * 0.25 * dt;
+              so.x += (so.targetX - so.x) * 0.12 * dt;
+              so.y += (so.targetY - so.y) * 0.12 * dt;
               const dx = so.targetX - so.x;
               const dy = so.targetY - so.y;
               if (dx * dx + dy * dy < 9) {
@@ -323,7 +308,7 @@ const WokPhysics = forwardRef(function WokPhysics(
           });
 
           // Advance when all landed or after a generous timeout
-          if ((allLanded && s.foodBodies.length === 0) || sa.timer > 30) {
+          if ((allLanded && s.foodBodies.length === 0) || sa.timer > 65) {
             // Force-land any stragglers
             sa.servedFood.forEach(sf => { sf.landed = true; sf.x = sf.targetX; sf.y = sf.targetY; });
             sa.servedOil.forEach(so => { so.landed = true; so.x = so.targetX; so.y = so.targetY; });
@@ -331,10 +316,10 @@ const WokPhysics = forwardRef(function WokPhysics(
             sa.timer = 0;
           }
         } else if (sa.phase === 2) {
-          // Plate slides out to the right, wok returns to center
-          const slideSpeed = 10 + sa.timer * 0.5;
+          // Plate slides out to the right, wok returns to center (slowed)
+          const slideSpeed = 5 + sa.timer * 0.25;
           sa.plateX += slideSpeed * dt;
-          sa.tiltAmount += (0 - sa.tiltAmount) * 0.25 * dt;
+          sa.tiltAmount += (0 - sa.tiltAmount) * 0.12 * dt;
 
           // Move served food/oil with the plate
           sa.servedFood.forEach(sf => { sf.x += slideSpeed * dt; });
@@ -491,13 +476,14 @@ const WokPhysics = forwardRef(function WokPhysics(
       });
 
       // Wok collisions
+      let impactsPlayedThisFrame = 0;
       s.foodBodies.forEach(f => {
         const dx = f.x - currentWokX;
         const mass = getMass(f);
         const bounciness = getBounciness(f);
 
         if (!f.spilled) {
-          if (Math.abs(dx) > wokRadius + 5 && f.y > currentWokY - 5) {
+          if (Math.abs(dx) > innerRadius + 5 && f.y > currentWokY - 5) {
             f.spilled = true;
             const isFirstForInstance = f.instanceId && !spilledInstancesRef.current.has(f.instanceId);
             if (isFirstForInstance) {
@@ -509,13 +495,16 @@ const WokPhysics = forwardRef(function WokPhysics(
         }
 
         if (!f.spilled) {
-          const maxDx = wokRadius - 5;
+          const maxDx = innerRadius - 5;
           const clampedDx = Math.max(-maxDx, Math.min(maxDx, dx));
           const angleOffset = Math.tan(wokAnimAngle) * clampedDx;
-          const groundY = currentWokY + angleOffset + Math.sqrt(wokRadius * wokRadius - clampedDx * clampedDx) - f.size / 2;
+          const groundY = currentWokY + angleOffset + Math.sqrt(innerRadius * innerRadius - clampedDx * clampedDx) - f.size / 2;
 
           if (f.y >= groundY) {
-            if (f.vy > 3) playFoodImpact();
+            if (f.vy > 3 && impactsPlayedThisFrame < 2) {
+              playFoodImpact();
+              impactsPlayedThisFrame++;
+            }
             f.y = groundY;
 
             if (isTossingGlobal) {
@@ -538,8 +527,8 @@ const WokPhysics = forwardRef(function WokPhysics(
           }
 
           if (f.y > currentWokY - 150) {
-            if (f.x < currentWokX - wokRadius + 15) { f.x = currentWokX - wokRadius + 15; f.vx *= -0.5; }
-            if (f.x > currentWokX + wokRadius - 15) { f.x = currentWokX + wokRadius - 15; f.vx *= -0.5; }
+            if (f.x < currentWokX - innerRadius + 8) { f.x = currentWokX - innerRadius + 8; f.vx *= -0.5; }
+            if (f.x > currentWokX + innerRadius - 8) { f.x = currentWokX + innerRadius - 8; f.vx *= -0.5; }
           }
         } else {
           f.vy += 0.8 * mass * dt;
@@ -548,10 +537,19 @@ const WokPhysics = forwardRef(function WokPhysics(
 
       s.foodBodies = s.foodBodies.filter(f => f.y < CH + 100);
 
-      // Soft body overlaps — different stiffness per type
-      for (let step = 0; step < 2; step++) {
+      const highLoad = s.foodBodies.length > BODY_COUNT_PERF_THRESHOLD;
+      const collisionSteps = highLoad ? 1 : 2;
+      const maxPairs = highLoad ? MAX_COLLISION_PAIRS_PER_FRAME : Infinity;
+
+      // Soft body overlaps — different stiffness per type (cap pairs when high load for 60fps)
+      let pairCount = 0;
+      for (let step = 0; step < collisionSteps; step++) {
+        if (highLoad) pairCount = 0;
         for (let i = 0; i < s.foodBodies.length; i++) {
+          if (highLoad && pairCount >= maxPairs) break;
           for (let j = i + 1; j < s.foodBodies.length; j++) {
+            if (highLoad && pairCount >= maxPairs) break;
+            pairCount++;
             const f1 = s.foodBodies[i], f2 = s.foodBodies[j];
             let ddx = f2.x - f1.x;
             let ddy = f2.y - f1.y;
@@ -598,87 +596,6 @@ const WokPhysics = forwardRef(function WokPhysics(
       }
 
       // ==========================================
-      // OIL FLUID PARTICLE ENGINE
-      // ==========================================
-      const targetOilCount = Math.floor(s.oilLevel * 3.5);
-      const missingOil = targetOilCount - s.oilParticles.length;
-
-      if (missingOil > 0) {
-        const spawnAmount = s.isOiling ? Math.min(12, missingOil) : missingOil;
-        for (let i = 0; i < spawnAmount; i++) {
-          const isInstant = !s.isOiling;
-          s.oilParticles.push({
-            x: currentWokX + (Math.random() - 0.5) * (isInstant ? 100 : 10),
-            y: isInstant ? currentWokY + 50 + Math.random() * 50 : currentWokY - 180 - Math.random() * 10,
-            vx: (Math.random() - 0.5) * (isInstant ? 3 : 0.8),
-            vy: isInstant ? 0 : Math.random() * 2 + 8,
-            size: 1.5 + Math.random() * 2.0,
-            spilled: false,
-            depthOffset: Math.random(),
-          });
-        }
-      } else if (missingOil < 0) {
-        const removeCount = Math.min(Math.abs(missingOil), 10);
-        for (let i = 0; i < removeCount; i++) {
-          const unspilledIdx = s.oilParticles.findIndex(p => !p.spilled);
-          if (unspilledIdx !== -1) s.oilParticles.splice(unspilledIdx, 1);
-          else s.oilParticles.pop();
-        }
-      }
-
-      s.oilParticles.forEach(p => {
-        p.vy += 0.8 * dt;
-        p.x += p.vx * dt;
-        p.y += p.vy * dt;
-
-        const dx = p.x - currentWokX;
-        if (!p.spilled && Math.abs(dx) > wokRadius + 15 && p.y > currentWokY - 20) {
-          p.spilled = true;
-        }
-
-        if (!p.spilled) {
-          const maxDx = wokRadius - 2;
-          const clampedDx = Math.max(-maxDx, Math.min(maxDx, dx));
-          const angleOffset = Math.tan(wokAnimAngle) * clampedDx;
-          const groundY = currentWokY + angleOffset + Math.sqrt(wokRadius * wokRadius - clampedDx * clampedDx) - p.size;
-          const poolDepth = s.oilLevel * 0.8;
-          const surfaceY = currentWokY + wokRadius - p.size - poolDepth;
-
-          let targetY = groundY;
-          if (surfaceY < groundY) {
-            targetY = surfaceY + (groundY - surfaceY) * p.depthOffset;
-          }
-
-          if (p.y >= targetY) {
-            p.y = targetY;
-            p.vy *= -0.1;
-            p.vx *= 0.9;
-            if (targetY === groundY) {
-              p.vx -= clampedDx * 0.06;
-            } else {
-              p.vx += (Math.random() - 0.5) * 3.5;
-            }
-            const safeVx = Math.max(-18, Math.min(18, wokVx));
-            const safeVy = Math.max(-18, Math.min(18, wokVy));
-            p.vx += safeVx * 0.03;
-            p.vy += safeVy * 0.1;
-            p.vx += Math.sin(wokAnimAngle) * 1.0;
-          }
-
-          if (Math.abs(dx) > wokRadius * 0.7 && p.y < currentWokY + 30) {
-            p.vy += 2.0;
-            p.vx *= 0.5;
-          }
-
-          if (p.y > currentWokY - 120) {
-            if (p.x < currentWokX - wokRadius + 5) { p.x = currentWokX - wokRadius + 5; p.vx *= -0.5; }
-            if (p.x > currentWokX + wokRadius - 5) { p.x = currentWokX + wokRadius - 5; p.vx *= -0.5; }
-          }
-        }
-      });
-      s.oilParticles = s.oilParticles.filter(p => p.y < CH + 100);
-
-      // ==========================================
       // WATER FLUID PARTICLE ENGINE
       // ==========================================
       const targetWaterCount = Math.floor(s.waterLevel * 4.0);
@@ -705,17 +622,17 @@ const WokPhysics = forwardRef(function WokPhysics(
         p.y += p.vy * dt;
 
         const dx = p.x - currentWokX;
-        if (!p.spilled && Math.abs(dx) > wokRadius + 5 && p.y > currentWokY - 20) {
+        if (!p.spilled && Math.abs(dx) > innerRadius + 5 && p.y > currentWokY - 20) {
           p.spilled = true;
         }
 
         if (!p.spilled) {
-          const maxDx = wokRadius - 2;
+          const maxDx = innerRadius - 2;
           const clampedDx = Math.max(-maxDx, Math.min(maxDx, dx));
           const angleOffset = Math.tan(wokAnimAngle) * clampedDx;
-          const groundY = currentWokY + angleOffset + Math.sqrt(wokRadius * wokRadius - clampedDx * clampedDx) - p.size;
+          const groundY = currentWokY + angleOffset + Math.sqrt(innerRadius * innerRadius - clampedDx * clampedDx) - p.size;
           const poolDepth = s.waterLevel * 0.9;
-          const surfaceY = currentWokY + wokRadius - p.size - poolDepth;
+          const surfaceY = currentWokY + innerRadius - p.size - poolDepth;
           let targetY = groundY;
           if (surfaceY < groundY) targetY = surfaceY + (groundY - surfaceY) * p.depthOffset;
 
@@ -735,13 +652,13 @@ const WokPhysics = forwardRef(function WokPhysics(
             p.vx += Math.sin(wokAnimAngle) * 2.0;
           }
 
-          if (Math.abs(dx) > wokRadius * 0.7 && p.y < currentWokY + 30) {
+          if (Math.abs(dx) > innerRadius * 0.7 && p.y < currentWokY + 30) {
             p.vy += 2.5;
             p.vx *= 0.5;
           }
           if (p.y > currentWokY - 120) {
-            if (p.x < currentWokX - wokRadius + 5) { p.x = currentWokX - wokRadius + 5; p.vx *= -0.5; }
-            if (p.x > currentWokX + wokRadius - 5) { p.x = currentWokX + wokRadius - 5; p.vx *= -0.5; }
+            if (p.x < currentWokX - innerRadius + 8) { p.x = currentWokX - innerRadius + 8; p.vx *= -0.5; }
+            if (p.x > currentWokX + innerRadius - 8) { p.x = currentWokX + innerRadius - 8; p.vx *= -0.5; }
           }
         }
       });
@@ -753,7 +670,7 @@ const WokPhysics = forwardRef(function WokPhysics(
 
       // Fire particles from burner (under wok)
       const fireCount = s.particles.reduce((n, p) => n + (p.type === 'fire' ? 1 : 0), 0);
-      const FIRE_CAP = 200;
+      const FIRE_CAP = highLoad ? FIRE_CAP_HIGH_LOAD : 200;
       if (s.heatLevel > 5 && !s.isCleaning && fireCount < FIRE_CAP) {
         const budget = FIRE_CAP - fireCount;
         const intensity = Math.min(1, (s.heatLevel - 5) / 95);
@@ -867,17 +784,18 @@ const WokPhysics = forwardRef(function WokPhysics(
       }
 
       // Smoke from cooking
-      if (s.heatLevel > 40 && s.foodBodies.length > 0 && Math.random() < (s.heatLevel / 100) * 0.4) {
+      const smokeChance = highLoad ? (s.heatLevel / 100) * 0.2 : (s.heatLevel / 100) * 0.4;
+      if (s.heatLevel > 40 && s.foodBodies.length > 0 && Math.random() < smokeChance) {
         const fx = currentWokX + (Math.random() - 0.5) * wokRadius;
         const fy = currentWokY + 20 + Math.random() * 40;
         s.particles.push({ type: 'smoke', x: fx, y: fy, vx: (Math.random() - 0.5) * 0.5, vy: -1 - Math.random() * 2, life: 0, maxLife: 40 + Math.random() * 30, size: 6 + Math.random() * 8 });
       }
 
       // Oil smoke at high heat — scales heavily with temperature
-      if (s.heatLevel > 40 && s.oilParticles.length > 0) {
+      if (s.heatLevel > 40 && s.oilLevel > 2) {
         const oilSmokeIntensity = (s.heatLevel - 40) / 60;
-        const smokeChance = 0.1 + oilSmokeIntensity * 0.6;
-        const smokeCount = Math.random() < smokeChance ? Math.ceil(oilSmokeIntensity * 3) : 0;
+        const smokeChance = (0.1 + oilSmokeIntensity * 0.6) * (highLoad ? 0.5 : 1);
+        const smokeCount = Math.random() < smokeChance ? Math.ceil(oilSmokeIntensity * (highLoad ? 2 : 3)) : 0;
         for (let i = 0; i < smokeCount; i++) {
           const fx = currentWokX + (Math.random() - 0.5) * wokRadius * 0.9;
           const fy = currentWokY + Math.random() * 35;
@@ -896,6 +814,11 @@ const WokPhysics = forwardRef(function WokPhysics(
       // Bubbles from boiling water
       if (s.waterParticles.length > 0 && s.heatLevel > 60 && Math.random() < 0.3) {
         s.particles.push({ type: 'bubble', x: currentWokX + (Math.random() - 0.5) * 60, y: currentWokY + wokRadius - 20, vx: (Math.random() - 0.5) * 1, vy: -1 - Math.random() * 2, life: 0, maxLife: 20 + Math.random() * 15, size: 2 + Math.random() * 3 });
+      }
+
+      // Cap total particles when high load to maintain 60fps
+      if (s.particles.length > PARTICLE_CAP_TOTAL) {
+        s.particles = s.particles.slice(-PARTICLE_CAP_TOTAL);
       }
 
       // ==========================================
@@ -996,7 +919,7 @@ const WokPhysics = forwardRef(function WokPhysics(
       let wokColor = '#161616';
       if (s.burnProgress >= 100) wokColor = '#050505';
       else if (s.cookProgress > 80) wokColor = '#241700';
-      ctx.lineWidth = 14;
+      ctx.lineWidth = 24;
       ctx.strokeStyle = wokColor;
       ctx.stroke();
 
@@ -1012,10 +935,10 @@ const WokPhysics = forwardRef(function WokPhysics(
         ctx.globalCompositeOperation = 'lighter';
         ctx.shadowColor = `rgba(255, 60, 0, ${glowIntensity})`;
         ctx.shadowBlur = 30 * glowIntensity;
-        ctx.lineWidth = 14;
+        ctx.lineWidth = 24;
         ctx.stroke();
         ctx.shadowBlur = 0;
-        ctx.lineWidth = 8;
+        ctx.lineWidth = 12;
         ctx.stroke();
         ctx.globalCompositeOperation = 'source-over';
       }
@@ -1030,20 +953,20 @@ const WokPhysics = forwardRef(function WokPhysics(
       ctx.rotate(wokAnimAngle);
 
       ctx.beginPath();
-      ctx.arc(0, 0, wokRadius - 7, 0, Math.PI);
+      ctx.arc(0, 0, wokRadius - 14, 0, Math.PI);
       ctx.fillStyle = '#0a0a0a';
       ctx.fill();
 
       ctx.beginPath();
-      ctx.arc(0, 0, wokRadius - 4, 0, Math.PI);
-      ctx.lineWidth = 4;
+      ctx.arc(0, 0, wokRadius - 10, 0, Math.PI);
+      ctx.lineWidth = 5;
       ctx.strokeStyle = '#333';
       ctx.stroke();
 
       // Wok residue stain
       if (s.wokResidue > 0) {
         ctx.beginPath();
-        ctx.arc(0, 0, wokRadius - 8, 0, Math.PI);
+        ctx.arc(0, 0, wokRadius - 15, 0, Math.PI);
         ctx.lineWidth = 8;
         ctx.strokeStyle = `rgba(28, 16, 0, ${s.wokResidue / 100})`;
         ctx.stroke();
@@ -1052,8 +975,8 @@ const WokPhysics = forwardRef(function WokPhysics(
       // Handle
       ctx.beginPath();
       ctx.moveTo(-wokRadius, 0);
-      ctx.lineTo(-wokRadius - 70, -25);
-      ctx.lineWidth = 18;
+      ctx.lineTo(-wokRadius - 80, -28);
+      ctx.lineWidth = 22;
       ctx.lineCap = 'round';
       ctx.strokeStyle = '#111';
       ctx.stroke();
@@ -1062,24 +985,39 @@ const WokPhysics = forwardRef(function WokPhysics(
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
-      // Render oil
-      if (s.oilParticles.length > 0) {
+      // Render oil as liquid pool (not particles) — puddle stays parallel to ground and shifts toward low side when tilted
+      if (s.oilLevel > 2) {
+        const oilRatio = Math.min(1, s.oilLevel / 100);
         ctx.save();
-        ctx.fillStyle = 'rgba(234, 179, 8, 0.4)';
-        s.oilParticles.forEach(p => {
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, p.size * 2.0, 0, Math.PI * 2);
-          ctx.fill();
-        });
-        ctx.fillStyle = 'rgba(253, 224, 71, 0.8)';
-        s.oilParticles.forEach(p => {
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-          ctx.fill();
-        });
+        ctx.translate(currentWokX, currentWokY);
+        ctx.rotate(wokAnimAngle);
+        ctx.beginPath();
+        ctx.arc(0, 0, wokRadius - 16, 0, Math.PI);
+        ctx.clip();
+        ctx.rotate(-wokAnimAngle);
+        const oilH = 6 + oilRatio * 22;
+        const oilW = (wokRadius - 22) * oilRatio * 1.15;
+        const oilY = wokRadius - 28 - oilH * 0.5;
+        const shiftX = wokAnimAngle * 42;
+        const liquidGrad = ctx.createLinearGradient(shiftX, oilY + oilH, shiftX, oilY - oilH);
+        liquidGrad.addColorStop(0, 'rgba(180, 120, 20, 0.85)');
+        liquidGrad.addColorStop(0.35, 'rgba(220, 165, 35, 0.9)');
+        liquidGrad.addColorStop(0.7, 'rgba(253, 224, 71, 0.75)');
+        liquidGrad.addColorStop(1, 'rgba(255, 250, 220, 0.5)');
+        ctx.fillStyle = liquidGrad;
+        ctx.beginPath();
+        ctx.ellipse(shiftX, oilY, oilW, oilH, 0, 0, Math.PI * 2);
+        ctx.fill();
+        const highlightGrad = ctx.createRadialGradient(-oilW * 0.35 + shiftX, oilY - oilH * 0.4, 0, -oilW * 0.35 + shiftX, oilY - oilH * 0.4, oilW * 0.5);
+        highlightGrad.addColorStop(0, 'rgba(255, 255, 240, 0.45)');
+        highlightGrad.addColorStop(0.5, 'rgba(255, 248, 200, 0.15)');
+        highlightGrad.addColorStop(1, 'rgba(255, 255, 255, 0)');
+        ctx.fillStyle = highlightGrad;
+        ctx.beginPath();
+        ctx.ellipse(-oilW * 0.25 + shiftX, oilY - oilH * 0.3, oilW * 0.45, oilH * 0.55, 0, 0, Math.PI * 2);
+        ctx.fill();
         ctx.restore();
       }
-
       // Render water
       if (s.waterParticles.length > 0) {
         ctx.save();
@@ -1120,6 +1058,7 @@ const WokPhysics = forwardRef(function WokPhysics(
       };
 
       const addShadow = (f, extra) => {
+        if (highLoad) return;
         const r = (f.w ? Math.max(f.w, f.h) : f.size) || f.size;
         const shadowY = 4 + (extra || 0);
         const grad = ctx.createRadialGradient(0, shadowY, 0, 0, shadowY, r * 1.8);
@@ -1146,7 +1085,7 @@ const WokPhysics = forwardRef(function WokPhysics(
         ctx.translate(f.x, f.y);
         ctx.rotate(f.rotation);
 
-        if (f.y < currentWokY - 40 && s.heatLevel > 80) {
+        if (!highLoad && f.y < currentWokY - 40 && s.heatLevel > 80) {
           ctx.shadowColor = 'rgba(251,191,36,0.6)';
           ctx.shadowBlur = 12;
           ctx.shadowOffsetX = 0;

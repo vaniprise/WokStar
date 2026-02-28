@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Flame, ChefHat, AlertTriangle, CheckCircle, Trash2, ChevronRight, ChevronLeft, Droplets, Info, Plus, Trophy, User, RotateCcw, BookOpen, Play, Crosshair, ShoppingCart, Settings, Heart } from 'lucide-react';
+import { Flame, ChefHat, AlertTriangle, CheckCircle, Trash2, ChevronRight, ChevronLeft, Droplets, Info, Plus, Trophy, User, RotateCcw, BookOpen, Play, Crosshair, ShoppingCart, Settings, Heart, X } from 'lucide-react';
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, onSnapshot } from 'firebase/firestore';
 import GameLoop from './GameLoop';
+import RestaurantHub, { loadRestaurantState, saveRestaurantState } from './RestaurantHub';
 import { initAudio as initAudioEngine } from './audioEngine';
 
 // ==========================================
@@ -14,6 +15,16 @@ const DIFF_MULTS = {
   NORMAL: { burn: 1.0, spill: 1.0, target: 1.0, name: 'NORMAL', color: 'text-yellow-400' },
   HARD: { burn: 1.5, spill: 2.0, target: 1.5, name: 'HARD', color: 'text-red-500' }
 };
+
+// ==========================================
+// ECONOMY: SCORE, CASH, PROFIT, REPUTATION, SOUL
+// ==========================================
+// SCORE   = Quality-adjusted lifetime earnings. Base dish value × Wok Hei × flavor combos × combo × prep × oil × tips + event bonuses. Never decreases. Drives STORY PROGRESSION and chef rank (Sik San, etc.). Used for leaderboard.
+// CASH    = Wallet — money you can spend now. Goes UP with profit from serves + tips + NPC cash bonuses. Goes DOWN when you add ingredients, buy upgrades, spill, or GIFT. Used to buy ingredients and shop upgrades only.
+// PROFIT  = From one serve: (revenue − ingredient cost). Revenue includes all score multipliers + speed tip. Profit is added to CASH.
+// TIPS    = Speed bonus from serving with time left on the ticket. Part of revenue → adds to both SCORE and CASH (via profit).
+// DELIGHT = Customer delight (-10 to +10). Starts at 0. +2 per successful serve (max +10), -2 per failed order/burn (or -1 with Goose); game over at -10.
+// SOUL    = Goodwill from GIFTing dishes (no cash profit). Used in story NPC encounters for bonuses. Does not affect cash or score.
 
 // ==========================================
 // AUDIO ENGINE
@@ -246,42 +257,46 @@ const playTrash = () => {
 
 const playTossShhh = () => {
   if (!audioCtx) return;
+  const now = audioCtx.currentTime;
   const noise = audioCtx.createBufferSource();
   noise.buffer = getNoiseBuffer();
   const filter = audioCtx.createBiquadFilter();
   const gain = audioCtx.createGain();
-  
+
   filter.type = 'bandpass';
-  filter.frequency.setValueAtTime(2500, audioCtx.currentTime);
-  filter.Q.value = 0.5;
-  gain.gain.setValueAtTime(0, audioCtx.currentTime);
-  gain.gain.linearRampToValueAtTime(0.25, audioCtx.currentTime + 0.1);
-  gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.4);
+  filter.frequency.setValueAtTime(1800, now);
+  filter.Q.value = 0.4;
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(0.1, now + 0.03);
+  gain.gain.exponentialRampToValueAtTime(0.008, now + 0.28);
 
   noise.connect(filter);
   filter.connect(gain);
   gain.connect(sfxGain);
-  
-  noise.start(); noise.stop(audioCtx.currentTime + 0.4);
+
+  noise.start(now);
+  noise.stop(now + 0.28);
 };
 
 const playFoodImpact = () => {
   if (!audioCtx) return;
   const now = audioCtx.currentTime;
-  
+
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
-  
+
   osc.type = 'sine';
-  osc.frequency.setValueAtTime(200, now);
-  osc.frequency.exponentialRampToValueAtTime(50, now + 0.05);
-  gain.gain.setValueAtTime(0.05, now);
-  gain.gain.exponentialRampToValueAtTime(0.01, now + 0.05);
-  
+  osc.frequency.setValueAtTime(180, now);
+  osc.frequency.exponentialRampToValueAtTime(60, now + 0.06);
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(0.04, now + 0.008);
+  gain.gain.exponentialRampToValueAtTime(0.006, now + 0.06);
+
   osc.connect(gain);
   gain.connect(sfxGain);
-  
-  osc.start(); osc.stop(now + 0.05);
+
+  osc.start(now);
+  osc.stop(now + 0.06);
 };
 
 const playIngredientAdd = (ingId) => {
@@ -372,11 +387,11 @@ const playIngredientAdd = (ingId) => {
 // GAME DATA & CONFIG
 // ==========================================
 const STORY_CHAPTERS = [
-  { target: 0, chapter: 0, title: "Chapter 1: The Fall of the Emperor", desc: "You were the arrogant 'Emperor of Eats'. But your evil apprentice framed you! Grab a rusty wok and start grinding out cheap fried rice to survive!", goal: "Earn $150 to buy a decent chef's knife.", color: "text-blue-400", border: "border-blue-900" },
-  { target: 150, chapter: 1, title: "Chapter 2: Temple Street Triads", desc: "You invent dishes so incredible the local triad bosses demand them! But now they want a hefty cut of your profits.", goal: "Earn $500 to pay off the local gangs.", color: "text-green-400", border: "border-green-900" },
-  { target: 500, chapter: 2, title: "Chapter 3: The 18 Bronze Chefs", desc: "You must master the ancient Dragon-Subduing Wok Tosses inside a giant brass bell at the Shaolin Culinary Monastery!", goal: "Earn $1,200 to graduate from Shaolin.", color: "text-yellow-400", border: "border-yellow-900" },
-  { target: 1200, chapter: 3, title: "Chapter 4: The Mega-Laser Wok", desc: "You only have your iron pan and your newfound Shaolin inner peace against Bullhorn's high-tech Mega-Laser Wok. Show them the true meaning of Wok Hei!", goal: "Earn $2,500 to expose the sabotage.", color: "text-orange-500", border: "border-orange-900" },
-  { target: 2500, chapter: 4, title: "Chapter 5: The Sorrowful Rice", desc: "Treachery! Bullhorn destroyed your premium ingredients! You must pour your soul into the legendary 'Sorrowful Rice'.", goal: "Earn $5,000 to ascend as the God of Cookery.", color: "text-red-500", border: "border-red-900" },
+  { target: 0, chapter: 0, title: "Chapter 1: The Fall of the Emperor", desc: "You were the arrogant 'Emperor of Eats'. But your evil apprentice framed you! Grab a rusty wok and start grinding out cheap fried rice to survive!", goal: "Reach a score of 150 to buy a decent chef's knife.", color: "text-blue-400", border: "border-blue-900" },
+  { target: 150, chapter: 1, title: "Chapter 2: Temple Street Triads", desc: "You invent dishes so incredible the local triad bosses demand them! But now they want a hefty cut of your profits.", goal: "Reach a score of 500 to pay off the local gangs.", color: "text-green-400", border: "border-green-900" },
+  { target: 500, chapter: 2, title: "Chapter 3: The 18 Bronze Chefs", desc: "You must master the ancient Dragon-Subduing Wok Tosses inside a giant brass bell at the Shaolin Culinary Monastery!", goal: "Reach a score of 1,200 to graduate from Shaolin.", color: "text-yellow-400", border: "border-yellow-900" },
+  { target: 1200, chapter: 3, title: "Chapter 4: The Mega-Laser Wok", desc: "You only have your iron pan and your newfound Shaolin inner peace against Bullhorn's high-tech Mega-Laser Wok. Show them the true meaning of Wok Hei!", goal: "Reach a score of 2,500 to expose the sabotage.", color: "text-orange-500", border: "border-orange-900" },
+  { target: 2500, chapter: 4, title: "Chapter 5: The Sorrowful Rice", desc: "Treachery! Bullhorn destroyed your premium ingredients! You must pour your soul into the legendary 'Sorrowful Rice'.", goal: "Reach a score of 5,000 to ascend as the God of Cookery.", color: "text-red-500", border: "border-red-900" },
   { target: 5000, chapter: 5, title: "EPILOGUE: Ascension", desc: "A divine light beams from the heavens. You are officially recognized by the celestial courts. You are the true SIK SAN!", goal: "Endless Glory.", color: "text-fuchsia-400", border: "border-fuchsia-900" }
 ];
 
@@ -481,6 +496,7 @@ const NPC_CHARACTERS = {
   sister13:  { name: "Sister Thirteen",  chName: "十三姨",   icon: "🥢", color: "text-red-400",     border: "border-red-700",     bg: "from-red-950/90" },
   bull_tong: { name: "Bull Tong",        chName: "唐牛",     icon: "🐂", color: "text-orange-400",  border: "border-orange-700",  bg: "from-orange-950/90" },
 };
+const NPC_IMAGES = { turkey: '/npc/turkey.png', goose: '/npc/goose.png', master: '/npc/master.png', sister13: '/npc/sister13.png', bull_tong: '/npc/bull_tong.png' };
 
 const SIDE_QUESTS = [
   {
@@ -519,7 +535,7 @@ const SIDE_QUESTS = [
         id: 'accept', label: '🤝 "Tell the Boss to bring his appetite."',
         response: "「好！今晚你係我嘅人！」(Good! Tonight, you're under my wing!)",
         effects: { cashBonus: 200, gooseProtection: true },
-        desc: "+$200 cash. Failed orders only cost half a reputation star this run."
+        desc: "+$200 cash. Failed orders only cost half a delight 😊 this run."
       },
       {
         id: 'refuse', label: '✊ "I cook for the people, not the triads."',
@@ -535,14 +551,14 @@ const SIDE_QUESTS = [
     dialog: [
       "「我聽講你以前係食神。Show me.」",
       "(I heard you used to be the God of Cookery. Show me.)",
-      "She taps two golden chopsticks together. The sound rings like a temple bell. Every customer goes silent. This is Sister Thirteen — the critic who has never given more than 3 stars."
+      "She taps two golden chopsticks together. The sound rings like a temple bell. Every customer goes silent. This is Sister Thirteen — the critic who has never left more than three customers delighted."
     ],
     choices: [
       {
         id: 'accept_review', label: '🔥 "Watch closely. I only cook once."',
         response: "「大口氣。我鍾意。」(Big talk. I like it.)",
         effects: { sister13Active: true },
-        desc: "HIGH RISK: Next perfect dish (95%+ cook, <10% burn, 85%+ Wok Hei) = permanent +15% revenue. Anything less = permanent -1 reputation star."
+        desc: "HIGH RISK: Next perfect dish (95%+ cook, <10% burn, 85%+ Wok Hei) = permanent +15% revenue. Anything less = permanent -1 delight 😊."
       },
       {
         id: 'decline_review', label: '😤 "I don\'t cook for critics."',
@@ -658,12 +674,21 @@ const SIDE_QUESTS = [
 // FIREBASE & APP
 // ==========================================
 let app, auth, db;
-const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+let firebaseConfig = null;
+try {
+  firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+} catch (_) {
+  firebaseConfig = null;
+}
 
 if (firebaseConfig && firebaseConfig.apiKey && getApps().length === 0) {
-  app = initializeApp(firebaseConfig);
-  auth = getAuth(app);
-  db = getFirestore(app);
+  try {
+    app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
+  } catch (e) {
+    console.warn('Firebase init failed:', e);
+  }
 }
 
 const appId = (typeof __app_id !== 'undefined' ? __app_id : 'wok-star-default').toString().replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -680,8 +705,8 @@ const resolveColor = (raw, cooked, burnt, cookRatio, burnRatio) => {
 };
 
 const DishIcon = ({ type, icons, isLandscape }) => {
-  const sizeClass = isLandscape ? 'w-8 h-8 md:w-12 md:h-12' : 'w-12 h-12 md:w-16 md:h-16';
-  const iconSizeClass = isLandscape ? 'text-sm md:text-lg' : 'text-xl md:text-2xl';
+  const sizeClass = isLandscape ? 'w-10 h-10 md:w-14 md:h-14' : 'w-14 h-14 md:w-20 md:h-20';
+  const iconSizeClass = isLandscape ? 'text-base md:text-xl' : 'text-2xl md:text-3xl';
   return (
     <div className={`relative flex items-center justify-center shrink-0 ${sizeClass}`}>
       {type === 'plate' ? (
@@ -721,7 +746,7 @@ export default function App() {
   const [ownedUpgrades, setOwnedUpgrades] = useState([]);
   
   const [combo, setCombo] = useState(1);
-  const [reputation, setReputation] = useState(5);
+  const [delight, setDelight] = useState(0);
   
   const flameTheme = combo >= 10 ? 'dark' : combo >= 5 ? 'angelic' : 'standard';
   
@@ -780,13 +805,17 @@ export default function App() {
   const [leaderboard, setLeaderboard] = useState([]);
   const [playerName, setPlayerName] = useState('');
   const [scoreSubmitted, setScoreSubmitted] = useState(false);
+  const [scoreSubmitting, setScoreSubmitting] = useState(false);
+  const [isRestaurantMode, setIsRestaurantMode] = useState(false);
+  const [restaurantShiftConfig, setRestaurantShiftConfig] = useState(null);
 
   const [questLog, setQuestLog] = useState({});
   const [npcBuffs, setNpcBuffs] = useState({});
   const [npcEncounter, setNpcEncounter] = useState(null);
 
   const canvasRef = useRef(null);
-  
+  const scoreRef = useRef(0);
+
   const prevHeatRef = useRef(0);
   useEffect(() => {
     const isWhoosh = heatLevel > prevHeatRef.current + 15;
@@ -819,6 +848,39 @@ export default function App() {
   useEffect(() => {
     gameDataRef.current = { ...gameDataRef.current, heatLevel, wokContents, cookProgress, burnProgress, wokHei, wokResidue, isCleaning, showGuide, showLeaderboard, showShop, showRecipes, flameTheme, ownedUpgrades, activePrepBuff, difficulty, oilLevel, isOiling, toss, waterLevel, waterDirtiness, npcBuffs };
   }, [heatLevel, wokContents, cookProgress, burnProgress, wokHei, wokResidue, isCleaning, showGuide, showLeaderboard, showShop, showRecipes, flameTheme, ownedUpgrades, activePrepBuff, difficulty, oilLevel, isOiling, toss, waterLevel, waterDirtiness, npcBuffs]);
+
+  useEffect(() => {
+    scoreRef.current = score;
+  }, [score]);
+
+  // Keyboard: Q = heat up, A = heat down, C = oil (hold)
+  useEffect(() => {
+    if (gameState !== 'PLAYING') return;
+    const target = (e) => /input|textarea|select/i.test(e.target?.tagName || '');
+    const onKeyDown = (e) => {
+      if (target(e)) return;
+      const k = e.key?.toLowerCase();
+      if (k === 'q') {
+        e.preventDefault();
+        setHeatLevel(prev => Math.min(100, prev + 8));
+      } else if (k === 'a') {
+        e.preventDefault();
+        setHeatLevel(prev => Math.max(0, prev - 8));
+      } else if (k === 'c') {
+        e.preventDefault();
+        setIsOiling(true);
+      }
+    };
+    const onKeyUp = (e) => {
+      if (e.key?.toLowerCase() === 'c') setIsOiling(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, [gameState]);
 
   useEffect(() => {
     if (!auth) return;
@@ -882,7 +944,7 @@ export default function App() {
           
           if (timeLeft <= 0 && !order.failed) {
             repLost++;
-            showNotification(`Order Failed! -1 Star`, 'error');
+            showNotification(`Order failed! Customer left unhappy. -1 😊`, 'error');
             setCombo(1); 
             gameDataRef.current.orderFailedTriggered = true; 
             return { ...order, timeLeft: 0, failed: true };
@@ -891,8 +953,12 @@ export default function App() {
         }).filter(o => o.timeLeft > -2); 
 
         if (repLost > 0) {
-            const repPerFail = state.npcBuffs?.gooseProtection ? 0.5 : 1;
-            setReputation(r => Math.max(0, r - repLost * repPerFail));
+            const perFail = state.npcBuffs?.gooseProtection ? 1 : 2;
+            setDelight(d => {
+              const next = Math.max(-10, d - repLost * perFail);
+              if (next <= -10) setGameState('GAMEOVER');
+              return next;
+            });
         }
         return newOrders;
       });
@@ -1061,9 +1127,17 @@ export default function App() {
     return () => clearInterval(interval);
   }, [gameState, isStoryMode, currentChapter, difficulty]);
 
+  // Story mode: when SCORE (quality-adjusted earnings) meets chapter target, advance immediately
   useEffect(() => {
-    if (reputation <= 0 && gameState === 'PLAYING') setGameState('GAMEOVER');
-  }, [reputation, gameState]);
+    if (!isStoryMode || gameState !== 'PLAYING') return;
+    const nextChap = STORY_CHAPTERS[currentChapter + 1];
+    const targetNeeded = nextChap ? nextChap.target * DIFF_MULTS[difficulty].target : Infinity;
+    if (nextChap && score >= targetNeeded) {
+      const nextChapterIndex = currentChapter + 1;
+      setCurrentChapter(curr => curr + 1);
+      setGameState(nextChapterIndex === 5 ? 'EPILOGUE' : 'STORY_CHAPTER');
+    }
+  }, [isStoryMode, gameState, score, currentChapter, difficulty]);
 
   // --- Engine Physics Canvas ---
   useEffect(() => {
@@ -1074,7 +1148,6 @@ export default function App() {
 
     let particles = [];
     let foodBodies = [];
-    let oilParticles = []; 
     let waterParticles = [];
     let floatingTexts = [];
     let shockwaves = [];
@@ -1098,6 +1171,7 @@ export default function App() {
     const wokCenterX = cw / 2;
     const wokCenterY = ch / 2 + 30; 
     const wokRadius = 140;
+    const innerRadius = wokRadius - 16;
 
     let lastDrawTime = performance.now();
     const fpsInterval = 1000 / 60; // 60 FPS cap for high-refresh rate monitors
@@ -1301,6 +1375,7 @@ export default function App() {
       });
 
       // 2. PHYSICS: Wok Collisions & Friction
+      let impactsPlayedThisFrame = 0;
       foodBodies.forEach(f => {
         const dx = f.x - currentWokX;
         
@@ -1310,8 +1385,8 @@ export default function App() {
         else if (['egg', 'scallion', 'chili', 'garlic', 'ginger'].includes(f.id)) mass = 2.0; 
 
         if (!f.spilled) {
-            // Adjusted spill bounds for the vertical cutaway walls
-            if (Math.abs(dx) > wokRadius + 5 && f.y > currentWokY - 5) {
+            // Adjusted spill bounds for the vertical cutaway walls (inner rim)
+            if (Math.abs(dx) > innerRadius + 5 && f.y > currentWokY - 5) {
                 f.spilled = true;
                 state.droppedItemsQueue.push(f.id);
                 floatingTexts.push({ text: "Spilled!", x: f.x, y: f.y - 30, life: 1, maxLife: 50, color: '#ef4444', size: 24, vy: -2 });
@@ -1320,14 +1395,17 @@ export default function App() {
         }
 
         if (!f.spilled) {
-            const maxDx = wokRadius - 5;
+            const maxDx = innerRadius - 5;
             const clampedDx = Math.max(-maxDx, Math.min(maxDx, dx));
             const angleOffset = Math.tan(wokAnimAngle) * clampedDx;
             
-            const groundY = currentWokY + angleOffset + Math.sqrt(wokRadius*wokRadius - clampedDx*clampedDx) - f.size/2;
+            const groundY = currentWokY + angleOffset + Math.sqrt(innerRadius*innerRadius - clampedDx*clampedDx) - f.size/2;
 
             if (f.y >= groundY) {
-              if (f.vy > 3) playFoodImpact(); 
+              if (f.vy > 3 && impactsPlayedThisFrame < 2) {
+                playFoodImpact();
+                impactsPlayedThisFrame++;
+              }
               
               f.y = groundY;
               
@@ -1351,7 +1429,7 @@ export default function App() {
                   f.rotSpeed = 0;
                   
                   // Only apply slope gravity if it's really far up the wall, otherwise let it stick in the pile
-                  if (Math.abs(dx) > wokRadius * 0.4) {
+                  if (Math.abs(dx) > innerRadius * 0.4) {
                       f.vx -= (clampedDx / maxDx) * 0.5; 
                   } else {
                       // Center pocket: instant dead zone
@@ -1361,8 +1439,8 @@ export default function App() {
             }
             
             if (f.y > currentWokY - 150) {
-                if (f.x < currentWokX - wokRadius + 15) { f.x = currentWokX - wokRadius + 15; f.vx *= -0.5; }
-                if (f.x > currentWokX + wokRadius - 15) { f.x = currentWokX + wokRadius - 15; f.vx *= -0.5; }
+                if (f.x < currentWokX - innerRadius + 8) { f.x = currentWokX - innerRadius + 8; f.vx *= -0.5; }
+                if (f.x > currentWokX + innerRadius - 8) { f.x = currentWokX + innerRadius - 8; f.vx *= -0.5; }
             }
         } else {
             f.vy += 0.8 * mass;
@@ -1430,95 +1508,6 @@ export default function App() {
       }
 
       // ==========================================
-      // OIL FLUID PARTICLE ENGINE
-      // ==========================================
-      const targetOilCount = Math.floor(state.oilLevel * 3.5); 
-      const missingOil = targetOilCount - oilParticles.length;
-      
-      if (missingOil > 0) {
-          // Instantly spawn existing oil in the pan, actively stream new oil if pouring
-          const spawnAmount = state.isOiling ? Math.min(12, missingOil) : missingOil;
-          for(let i=0; i<spawnAmount; i++) {
-              const isInstant = !state.isOiling;
-              oilParticles.push({
-                  x: currentWokX + (Math.random() - 0.5) * (isInstant ? 100 : 10),
-                  y: isInstant ? currentWokY + 50 + Math.random()*50 : currentWokY - 180 - Math.random() * 10,
-                  vx: (Math.random() - 0.5) * (isInstant ? 3 : 0.8),
-                  vy: isInstant ? 0 : Math.random() * 2 + 8,
-                  size: 1.5 + Math.random() * 2.0,
-                  spilled: false,
-                  depthOffset: Math.random()
-              });
-          }
-      } else if (missingOil < 0) {
-          const removeCount = Math.min(Math.abs(missingOil), 10);
-          for(let i=0; i<removeCount; i++) {
-              const unspilledIdx = oilParticles.findIndex(p => !p.spilled);
-              if (unspilledIdx !== -1) oilParticles.splice(unspilledIdx, 1);
-              else oilParticles.pop();
-          }
-      }
-
-      oilParticles.forEach(p => {
-          p.vy += 0.8; 
-          p.x += p.vx;
-          p.y += p.vy;
-
-          const dx = p.x - currentWokX;
-          
-          if (!p.spilled && Math.abs(dx) > wokRadius + 15 && p.y > currentWokY - 20) {
-              p.spilled = true;
-          }
-
-          if (!p.spilled) {
-              const maxDx = wokRadius - 2;
-              const clampedDx = Math.max(-maxDx, Math.min(maxDx, dx));
-              const angleOffset = Math.tan(wokAnimAngle) * clampedDx;
-              
-              const groundY = currentWokY + angleOffset + Math.sqrt(wokRadius*wokRadius - clampedDx*clampedDx) - p.size;
-              
-              const poolDepth = state.oilLevel * 0.8;
-              const surfaceY = currentWokY + wokRadius - p.size - poolDepth;
-
-              let targetY = groundY;
-
-              if (surfaceY < groundY) {
-                  targetY = surfaceY + (groundY - surfaceY) * p.depthOffset;
-              }
-
-              if (p.y >= targetY) {
-                  p.y = targetY; 
-                  p.vy *= -0.1; 
-                  p.vx *= 0.9; 
-
-                  if (targetY === groundY) {
-                      p.vx -= clampedDx * 0.06; 
-                  } else {
-                      p.vx += (Math.random() - 0.5) * 3.5; 
-                  }
-
-                  const safeVx = Math.max(-18, Math.min(18, wokVx));
-                  const safeVy = Math.max(-18, Math.min(18, wokVy));
-                  p.vx += safeVx * 0.03;
-                  p.vy += safeVy * 0.1;
-                  p.vx += Math.sin(wokAnimAngle) * 1.0; 
-              }
-              
-              if (Math.abs(dx) > wokRadius * 0.7 && p.y < currentWokY + 30) {
-                  p.vy += 2.0; 
-                  p.vx *= 0.5; 
-              }
-
-              if (p.y > currentWokY - 120) {
-                  if (p.x < currentWokX - wokRadius + 5) { p.x = currentWokX - wokRadius + 5; p.vx *= -0.5; }
-                  if (p.x > currentWokX + wokRadius - 5) { p.x = currentWokX + wokRadius - 5; p.vx *= -0.5; }
-              }
-          }
-      });
-      
-      oilParticles = oilParticles.filter(p => p.y < ch + 100);
-
-      // ==========================================
       // WATER FLUID PARTICLE ENGINE (CLEANING)
       // ==========================================
       const targetWaterCount = Math.floor(state.waterLevel * 4.0); 
@@ -1546,18 +1535,18 @@ export default function App() {
 
           const dx = p.x - currentWokX;
           
-          if (!p.spilled && Math.abs(dx) > wokRadius + 5 && p.y > currentWokY - 20) {
+          if (!p.spilled && Math.abs(dx) > innerRadius + 5 && p.y > currentWokY - 20) {
               p.spilled = true;
           }
 
           if (!p.spilled) {
-              const maxDx = wokRadius - 2;
+              const maxDx = innerRadius - 2;
               const clampedDx = Math.max(-maxDx, Math.min(maxDx, dx));
               const angleOffset = Math.tan(wokAnimAngle) * clampedDx;
               
-              const groundY = currentWokY + angleOffset + Math.sqrt(wokRadius*wokRadius - clampedDx*clampedDx) - p.size;
+              const groundY = currentWokY + angleOffset + Math.sqrt(innerRadius*innerRadius - clampedDx*clampedDx) - p.size;
               const poolDepth = state.waterLevel * 0.9;
-              const surfaceY = currentWokY + wokRadius - p.size - poolDepth;
+              const surfaceY = currentWokY + innerRadius - p.size - poolDepth;
 
               let targetY = groundY;
               if (surfaceY < groundY) targetY = surfaceY + (groundY - surfaceY) * p.depthOffset;
@@ -1580,14 +1569,14 @@ export default function App() {
                   p.vx += Math.sin(wokAnimAngle) * 2.0; 
               }
               
-              if (Math.abs(dx) > wokRadius * 0.7 && p.y < currentWokY + 30) {
+              if (Math.abs(dx) > innerRadius * 0.7 && p.y < currentWokY + 30) {
                   p.vy += 2.5; 
                   p.vx *= 0.5; 
               }
 
               if (p.y > currentWokY - 120) {
-                  if (p.x < currentWokX - wokRadius + 5) { p.x = currentWokX - wokRadius + 5; p.vx *= -0.5; }
-                  if (p.x > currentWokX + wokRadius - 5) { p.x = currentWokX + wokRadius - 5; p.vx *= -0.5; }
+                  if (p.x < currentWokX - innerRadius + 8) { p.x = currentWokX - innerRadius + 8; p.vx *= -0.5; }
+                  if (p.x > currentWokX + innerRadius - 8) { p.x = currentWokX + innerRadius - 8; p.vx *= -0.5; }
               }
           }
       });
@@ -1734,27 +1723,7 @@ export default function App() {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
 
-      // 7. Render Fluids (Oil & Water)
-      if (oilParticles.length > 0) {
-          ctx.save();
-          
-          ctx.fillStyle = 'rgba(234, 179, 8, 0.4)'; 
-          oilParticles.forEach(p => {
-              ctx.beginPath();
-              ctx.arc(p.x, p.y, p.size * 2.0, 0, Math.PI * 2);
-              ctx.fill();
-          });
-
-          ctx.fillStyle = 'rgba(253, 224, 71, 0.8)'; 
-          oilParticles.forEach(p => {
-              ctx.beginPath();
-              ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
-              ctx.fill();
-          });
-          
-          ctx.restore();
-      }
-
+      // 7. Render Fluids (Water; oil is puddle only in WokPhysics)
       if (waterParticles.length > 0) {
           ctx.save();
           const dirt = state.waterDirtiness / 100;
@@ -2301,7 +2270,7 @@ export default function App() {
     setSoul(0);
     setOwnedUpgrades([]);
     setCombo(1);
-    setReputation(5);
+    setDelight(0);
     setWokResidue(0);
     setOilLevel(20);
     setActivePrepBuff(null);
@@ -2330,6 +2299,29 @@ export default function App() {
           }
           return true;
       });
+  };
+
+  const getStoryProgress = () => {
+      if (currentChapter >= 5) return { pct: 100, current: score, target: score, label: 'Campaign complete' };
+      const nextChap = STORY_CHAPTERS[currentChapter + 1];
+      const target = nextChap ? nextChap.target * DIFF_MULTS[difficulty].target : 0;
+      const pct = target > 0 ? Math.max(0, Math.min(100, (score / target) * 100)) : 0;
+      return { pct, current: score, target, label: nextChap ? STORY_CHAPTERS[currentChapter].goal : '' };
+  };
+
+  const getChapterTodos = (chapter) => {
+      const nextChap = STORY_CHAPTERS[chapter + 1];
+      const nextTarget = nextChap ? nextChap.target * DIFF_MULTS[difficulty].target : 0;
+      const baseGoal = STORY_CHAPTERS[chapter].goal;
+      const goalLabel = nextChap
+        ? String(baseGoal).replace(/Reach a score of [\d,]+/, `Reach a score of ${Math.round(nextTarget)}`)
+        : 'Complete the campaign';
+      const todos = [{ id: 'goal', label: goalLabel, done: nextTarget > 0 && score >= nextTarget }];
+      const encounterQuests = SIDE_QUESTS.filter(q => q.chapter === chapter && (!q.requires || questLog[q.requires.questId] === q.requires.choiceId));
+      encounterQuests.forEach(q => {
+          todos.push({ id: q.id, label: `Meet ${NPC_CHARACTERS[q.npc].name}: ${q.title}`, done: !!questLog[q.id] });
+      });
+      return todos;
   };
 
   const continueStory = () => {
@@ -2474,6 +2466,7 @@ export default function App() {
   };
 
   const prevTossRef = useRef({ x: 0, y: 0 });
+  const lastTossShhhRef = useRef(0);
 
   const handleTossPointer = (e) => {
     if (e.type === 'pointermove' && e.buttons !== 1) return;
@@ -2506,8 +2499,12 @@ export default function App() {
     if (velocity > 0.08) {
         gameDataRef.current.tossTriggered = true;
         gameDataRef.current.lastTossTime = Date.now();
-        if (velocity > 0.15) { 
-            playTossShhh();
+        if (velocity > 0.15) {
+            const now = Date.now();
+            if (now - (lastTossShhhRef.current || 0) >= 220) {
+                lastTossShhhRef.current = now;
+                playTossShhh();
+            }
             // Reduced heat penalty so repeated tossing doesn't drain heat too fast
             const coolAmount = gameDataRef.current.ownedUpgrades.includes('iron_palm') ? 0.6 : 0.2;
             setHeatLevel(prev => Math.max(5, prev - coolAmount));
@@ -2578,7 +2575,7 @@ export default function App() {
         if (canFulfill) {
             if (!isDonation && order.requiresWokHei && wokHei < order.requiresWokHei) {
                 showNotification("Failed! VIP demanded 90% Wok Hei!", "error");
-                setReputation(r => Math.max(0, r - (npcBuffs.gooseProtection ? 0.5 : 1)));
+                setDelight(d => { const next = Math.max(-10, d - (npcBuffs.gooseProtection ? 1 : 2)); if (next <= -10) setGameState('GAMEOVER'); return next; });
                 setCombo(1);
                 gameDataRef.current.trashTriggered = true;
                 setOrders(prev => prev.filter((_, idx) => idx !== i));
@@ -2610,8 +2607,8 @@ export default function App() {
                 showNotification("十三姨: 唔錯! +15% Revenue!", "success");
             } else {
                 setNpcBuffs(prev => ({ ...prev, sister13Active: false }));
-                setReputation(r => Math.max(0, r - (npcBuffs.gooseProtection ? 0.5 : 1)));
-                showNotification("十三姨: 我就知。(I knew it.) -1 Star!", "error");
+                setDelight(d => { const next = Math.max(-10, d - (npcBuffs.gooseProtection ? 1 : 2)); if (next <= -10) setGameState('GAMEOVER'); return next; });
+                showNotification("十三姨: 我就知。(I knew it.) -2 delight", "error");
             }
         }
 
@@ -2684,7 +2681,21 @@ export default function App() {
             };
         } else {
             setCash(c => c + profit); 
-            setScore(s => s + finalRevenue); 
+            setScore(prevScore => {
+                const newScore = prevScore + finalRevenue;
+                if (isStoryMode) {
+                    const nextChap = STORY_CHAPTERS[currentChapter + 1];
+                    const targetNeeded = nextChap ? nextChap.target * DIFF_MULTS[difficulty].target : Infinity;
+                    if (nextChap && newScore >= targetNeeded) {
+                        const nextChapterIndex = currentChapter + 1;
+                        setTimeout(() => {
+                            setCurrentChapter(curr => curr + 1);
+                            setGameState(nextChapterIndex === 5 ? 'EPILOGUE' : 'STORY_CHAPTER');
+                        }, 1500);
+                    }
+                }
+                return newScore;
+            });
             
             if (newCombo >= 3 && combo < 3) triggerStreakPopup("HEATING UP! 🔥", "#f97316");
             else if (newCombo >= 5 && combo < 5) triggerStreakPopup("WOK & ROLL! 🎸", "#eab308");
@@ -2704,17 +2715,6 @@ export default function App() {
         setOrders(prev => prev.filter((_, idx) => idx !== matchedOrderIndex));
         emptyWok();
 
-        if (isStoryMode) {
-            const nextChap = STORY_CHAPTERS[currentChapter + 1];
-            if (nextChap && score >= nextChap.target * DIFF_MULTS[difficulty].target) {
-                setTimeout(() => {
-                    setCurrentChapter(curr => curr + 1);
-                    if (currentChapter + 1 === 5) setGameState('EPILOGUE');
-                    else setGameState('STORY_CHAPTER');
-                }, 1500); 
-            }
-        }
-
     } else {
         if (isDonation) {
             let totalCost = 0;
@@ -2731,7 +2731,7 @@ export default function App() {
             setCombo(1); 
             emptyWok();  
         } else {
-            setReputation(r => Math.max(0, r - (npcBuffs.gooseProtection ? 0.5 : 1)));
+            setDelight(d => { const next = Math.max(-10, d - (npcBuffs.gooseProtection ? 1 : 2)); if (next <= -10) setGameState('GAMEOVER'); return next; });
             setCombo(1);
             gameDataRef.current.trashTriggered = true;
             emptyWok();
@@ -2741,25 +2741,54 @@ export default function App() {
 
   const showNotification = (msg, type = 'normal') => {
     const id = Date.now();
+    const durationMs = type === 'success' ? 5000 : 2000;
     setNotifications(prev => [...prev, { id, msg: String(msg), type }]);
-    setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), 2000);
+    setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), durationMs);
+  };
+
+  const bringOrderToFront = (orderId) => {
+    setOrders(prev => {
+      const idx = prev.findIndex(o => o.id === orderId);
+      if (idx <= 0) return prev;
+      const next = prev.slice();
+      const [picked] = next.splice(idx, 1);
+      next.unshift(picked);
+      return next;
+    });
   };
 
   const submitScoreToLeaderboard = async () => {
-    if (!user || !playerName.trim() || scoreSubmitted || score === 0) return;
+    if (!playerName.trim()) return;
+    if (scoreSubmitted) return;
+    if (score === 0) {
+      showNotification("Score is 0 — nothing to submit.", "error");
+      return;
+    }
+    if (!user) {
+      showNotification("Sign-in required to submit to the leaderboard. Enable Anonymous sign-in in Firebase, or use a signed-in build.", "error");
+      return;
+    }
+    if (!db) {
+      showNotification("Leaderboard is not available. Check Firebase config.", "error");
+      return;
+    }
+    setScoreSubmitting(true);
     try {
       await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'leaderboard'), {
         userId: user.uid,
         name: playerName.trim(),
-        score: Number(score.toFixed(2)),
+        score: Math.round(Number(score)),
         title: getScoreTitle(score).title,
         timestamp: Date.now()
       });
       setScoreSubmitted(true);
       setShowLeaderboard(true);
+      showNotification("Score submitted!", "success");
     } catch (err) {
       console.error("Error submitting score", err);
-      showNotification("Failed to save score.", "error");
+      showNotification("Failed to save score. Check console or Firebase rules.", "error");
+    } finally {
+      setScoreSubmitting(false);
     }
   };
 
@@ -2778,10 +2807,12 @@ export default function App() {
   const dynPrompt = getDynamicPrompt();
   const wokUmami = getWokUmami();
 
+  const storyProgress = isStoryMode && gameState === 'PLAYING' ? getStoryProgress() : null;
+
   return (
-    <div className="absolute inset-0 bg-neutral-950 text-white font-sans overflow-hidden flex flex-col user-select-none pb-8 md:pb-12">
+    <div className={`absolute inset-0 bg-neutral-950 text-white font-sans overflow-hidden flex flex-col user-select-none pb-8 md:pb-12 ${gameState === 'PLAYING' ? 'gameplay-touch-lock' : ''}`}>
       
-      {/* UI FLASH & STREAK ANIMATIONS */}
+      {/* UI FLASH & STREAK ANIMATIONS + TOUCH LOCK (tablets/phones during gameplay) */}
       <style>{`
         @keyframes pop {
           0% { transform: scale(1); }
@@ -2798,6 +2829,15 @@ export default function App() {
             100% { transform: translate(-50%, -50%) scale(1.5) rotate(5deg); opacity: 0; filter: blur(10px); }
         }
         .animate-streak { animation: streak-zoom 2s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards; }
+
+        /* Disable zoom and text selection on touch devices during gameplay */
+        .gameplay-touch-lock,
+        .gameplay-touch-lock * {
+          touch-action: none;
+          -webkit-user-select: none;
+          user-select: none;
+          -webkit-touch-callout: none;
+        }
       `}</style>
 
       {/* --- HEADER --- */}
@@ -2808,18 +2848,63 @@ export default function App() {
             <h1 className="text-lg md:text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-orange-500 to-yellow-300 flex items-center gap-2">
               WOK STAR
               {activePrepBuff && activePrepBuff.name !== "SLOPPY PREP" && (
-                <span className={`text-[8px] md:text-[10px] uppercase tracking-widest ${activePrepBuff.color} border border-current px-2 py-0.5 rounded-full hidden md:inline-block`}>
+                <span className={`text-[8px] md:text-[10px] uppercase tracking-widest ${activePrepBuff.color} border border-current px-2 py-0.5 rounded-full hidden md:inline-block`} title="Prep buff from the start-of-shift minigame. Michelin = +50% cash, +20% cook, -20% burn. Solid = +20% cash, +10% cook, -10% burn. Sloppy = no bonus. Lasts the whole shift.">
                   {String(activePrepBuff.name)}
                 </span>
               )}
             </h1>
           </div>
-          <div className="bg-neutral-800 px-3 md:px-4 py-0.5 md:py-1 rounded-full text-green-400 font-mono text-sm md:text-lg border border-neutral-700 flex items-center gap-1 md:gap-2">
-            <span key={cash} className={`inline-block animate-pop ${cash < 0 ? 'text-red-500' : 'text-green-400'}`}>${Number(cash).toFixed(2)} {ownedUpgrades.includes('rolex') && '💎'}</span>
-            {soul > 0 && <span key={`soul-${soul}`} className="text-cyan-400 inline-block font-bold animate-pop flex items-center gap-1 ml-2"><Heart size={14} fill="currentColor" /> {soul}</span>}
-            {combo > 1 && <span key={combo} className="text-xs md:text-sm text-orange-400 inline-block font-black animate-pop ml-2">x{combo}</span>}
+          <div className="bg-neutral-800 px-3 md:px-4 py-1.5 md:py-2 rounded-full border border-neutral-700 flex items-center gap-3 md:gap-4 flex-wrap">
+            <div className="flex items-center gap-1.5 md:gap-2" title="Total score">
+              <span className="text-[9px] md:text-[10px] text-amber-400/90 uppercase tracking-widest shrink-0">Score</span>
+              <span className="font-mono text-amber-300 font-bold text-sm md:text-lg tabular-nums animate-pop" title="Score">{Math.round(Number(score))}</span>
+            </div>
+            <span className="text-neutral-600 shrink-0" aria-hidden="true">·</span>
+            <div className="flex items-center gap-1.5 md:gap-2" title="Wallet">
+              <span className="text-[9px] md:text-[10px] text-green-400/90 uppercase tracking-widest shrink-0">Cash</span>
+              <span className={`font-mono font-bold text-sm md:text-lg tabular-nums animate-pop ${cash < 0 ? 'text-red-500' : 'text-green-400'}`} title="Cash">${Number(cash).toFixed(2)} {ownedUpgrades.includes('rolex') && '💎'}</span>
+            </div>
+            {soul > 0 && <span key={`soul-${soul}`} className="text-cyan-400 font-bold flex items-center gap-1 border-l border-neutral-700 pl-2" title="Soul (goodwill): from GIFTing. Used in NPC encounters."><Heart size={14} fill="currentColor" /> {soul}</span>}
+            {combo > 1 && <span key={combo} className="text-xs md:text-sm text-orange-400 font-black border-l border-neutral-700 pl-2" title="Combo multiplier">x{combo}</span>}
           </div>
         </div>
+
+        {/* When playing: context label (My Restaurant / Sandbox / Chapter) centered, above score bar & objectives */}
+        {gameState === 'PLAYING' && (
+          <div className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 pointer-events-none">
+            <div className={`text-xs md:text-sm font-bold truncate max-w-[50vw] ${isRestaurantMode ? 'text-amber-400' : !isStoryMode ? 'text-cyan-400' : (STORY_CHAPTERS[currentChapter]?.color ?? 'text-orange-400')}`} title={isRestaurantMode ? 'Restaurant shift' : !isStoryMode ? 'Sandbox mode' : 'Story chapter'}>
+              {isRestaurantMode ? '🍳 My Restaurant' : !isStoryMode ? '🧪 Sandbox Kitchen' : (STORY_CHAPTERS[currentChapter]?.title ?? 'Chapter 1')}
+            </div>
+            {isStoryMode && storyProgress !== null && (
+              <div className="flex items-center gap-2 md:gap-3 flex-wrap justify-center">
+                <span className="text-[10px] md:text-xs text-neutral-500 uppercase tracking-widest shrink-0" title="Score">Score</span>
+                <div className="relative w-24 md:w-32 lg:w-40 h-3 md:h-4 bg-neutral-800 rounded-full overflow-hidden border border-neutral-700 shrink-0">
+                  <div
+                    className="h-full bg-gradient-to-r from-yellow-600 to-green-500 transition-all duration-200 rounded-full"
+                    style={{ width: `${storyProgress.pct}%` }}
+                  />
+                  <span className="absolute inset-0 flex items-center justify-center text-[10px] md:text-xs font-black text-yellow-400 tabular-nums drop-shadow-[0_0_1px_rgba(0,0,0,0.8)]">
+                    {Math.round(storyProgress.pct)}%
+                  </span>
+                </div>
+                <span className="text-[10px] md:text-xs text-neutral-500 font-mono shrink-0" title="Current / target">{Math.round(Number(storyProgress.current))} / {Math.round(storyProgress.target)}</span>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] md:text-xs border-l border-neutral-700 pl-2 md:pl-3">
+                  <span className="text-neutral-600 uppercase tracking-wider shrink-0">Objectives:</span>
+                  {getChapterTodos(currentChapter).map(t => (
+                    <span
+                      key={t.id}
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border ${t.done ? 'bg-green-900/30 border-green-700/50 text-green-400' : 'bg-neutral-800/80 border-neutral-700 text-neutral-400'}`}
+                    >
+                      {t.done ? <CheckCircle className="w-3 h-3 shrink-0" /> : <span className="w-3 h-3 shrink-0 rounded-full border border-current" />}
+                      <span className={t.done ? 'line-through' : ''}>{String(t.label)}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="flex items-center gap-2 md:gap-3">
           <button onClick={() => setShowOptions(true)} className="p-1.5 md:p-2 bg-neutral-800 hover:bg-neutral-700 rounded-full transition-colors text-blue-400 hover:text-blue-300 shadow-md" title="Options">
             <Settings className="w-4 h-4 md:w-5 md:h-5" />
@@ -2840,12 +2925,27 @@ export default function App() {
             <RotateCcw className="w-4 h-4 md:w-5 md:h-5" />
           </button>
 
-          <div className="flex gap-0.5 md:gap-1 hidden sm:flex ml-1 md:ml-2 border-l border-neutral-700 pl-2 md:pl-4">
-            {[...Array(5)].map((_, i) => (
-              <svg key={i} className={`w-4 h-4 md:w-6 md:h-6 ${i < Math.round(reputation) ? 'text-yellow-400 drop-shadow-[0_0_5px_rgba(250,204,21,0.5)]' : 'text-neutral-800'}`} fill="currentColor" viewBox="0 0 20 20">
-                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-              </svg>
-            ))}
+          <div className="flex gap-1.5 md:gap-2 hidden sm:flex ml-1 md:ml-2 border-l border-neutral-700 pl-2 md:pl-4 items-center" title="Customer Delight: -10 (angry) to +10 (delighted). 0 = center. Earn by serving well, lose on fails. Game over at -10.">
+            <span className="text-[9px] font-bold text-amber-400 uppercase tracking-wider shrink-0">Delight</span>
+            <div className="flex items-center gap-1">
+              <span className="text-base md:text-lg opacity-80" title="-10 (angry)">😠</span>
+              <div className="w-16 md:w-20 h-2.5 md:h-3 bg-neutral-800 rounded-full overflow-hidden border border-neutral-700 flex relative shrink-0">
+                {(() => {
+                  const d = Number(delight);
+                  if (Number.isNaN(d)) return null;
+                  const displayValue = Math.max(-10, Math.min(10, d));
+                  const redWidth = displayValue < 0 ? ((-displayValue) / 10) * 50 : 0;
+                  const greenWidth = displayValue > 0 ? (displayValue / 10) * 50 : 0;
+                  return (
+                    <>
+                      {redWidth > 0 && <div className="absolute top-0 bottom-0 right-1/2 bg-red-500 rounded-l-full transition-all duration-200" style={{ width: `${redWidth}%` }} />}
+                      {greenWidth > 0 && <div className="absolute top-0 bottom-0 left-1/2 bg-green-500 rounded-r-full transition-all duration-200" style={{ width: `${greenWidth}%` }} />}
+                    </>
+                  );
+                })()}
+              </div>
+              <span className="text-base md:text-lg opacity-80" title="+10 (delighted)">😊</span>
+            </div>
           </div>
         </div>
 
@@ -2888,6 +2988,9 @@ export default function App() {
               <button onClick={() => startGame('ENDLESS')} className="w-full py-3 flex items-center justify-center gap-2 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-bold uppercase tracking-widest text-neutral-300 transition-transform active:scale-95">
                 <Play size={20} /> Endless Shift
               </button>
+              <button onClick={() => { setGameState('RESTAURANT_HUB'); }} className="w-full py-3 flex items-center justify-center gap-2 bg-amber-900/80 hover:bg-amber-800 rounded-xl font-bold uppercase tracking-widest text-amber-200 transition-transform active:scale-95 border border-amber-700/50">
+                <ChefHat size={20} /> My Restaurant
+              </button>
               <div className="flex gap-3 mt-2">
                  <button onClick={() => setShowGuide(true)} className="flex-1 py-3 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-bold uppercase tracking-widest text-neutral-300 transition-transform active:scale-95 flex items-center justify-center gap-2 text-xs">
                    <Info size={16} /> How to Play
@@ -2898,6 +3001,19 @@ export default function App() {
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* --- RESTAURANT HUB --- */}
+      {gameState === 'RESTAURANT_HUB' && !showGuide && !showLeaderboard && !showShop && !showRecipes && (
+        <div className="flex-1 flex flex-col absolute inset-0 z-50 min-h-0">
+          <RestaurantHub
+            onStartShift={({ dailySpecialId, contracts }) => {
+              setRestaurantShiftConfig({ dailySpecialId, contracts });
+              setIsRestaurantMode(true);
+              setGameState('PLAYING');
+            }}
+          />
         </div>
       )}
 
@@ -2919,20 +3035,54 @@ export default function App() {
             </p>
             
             {gameState !== 'EPILOGUE' && (
-              <div className="bg-black/50 p-4 rounded-xl border border-neutral-800 mb-8 inline-block text-left">
-                 <div className="text-xs text-neutral-500 uppercase tracking-widest mb-1 flex items-center justify-between gap-4">
-                   <span>Current Objective:</span>
+              <div className="bg-black/50 p-4 rounded-xl border border-neutral-800 mb-6 inline-block text-left w-full max-w-lg">
+                 <div className="text-xs text-neutral-500 uppercase tracking-widest mb-2 flex items-center justify-between gap-4">
+                   <span title="Level progress">Level progress</span>
                    <span className={`text-[10px] font-black px-2 py-0.5 rounded-sm bg-black border border-current ${DIFF_MULTS[difficulty].color}`}>{difficulty}</span>
                  </div>
-                 <div className="text-lg font-bold text-yellow-400 flex items-center gap-2">
-                   <Trophy size={20}/> 
-                   {(() => {
-                      const nextChap = STORY_CHAPTERS[currentChapter + 1];
-                      const nextTarget = nextChap ? (nextChap.target * DIFF_MULTS[difficulty].target).toFixed(0) : 0;
-                      return String(STORY_CHAPTERS[currentChapter].goal).replace(/\$[\d,]+/, `$${nextTarget}`);
-                   })()}
-                 </div>
-                 <div className="text-xs text-neutral-400 mt-2 italic">Lifetime Earnings: ${score.toFixed(2)}</div>
+                 {(() => {
+                    const prog = getStoryProgress();
+                    return (
+                      <>
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="flex-1 h-5 md:h-6 bg-neutral-800 rounded-full overflow-hidden border border-neutral-700">
+                            <div 
+                              className="h-full bg-gradient-to-r from-yellow-600 to-green-500 transition-all duration-500 rounded-full" 
+                              style={{ width: `${Math.round(prog.pct)}%` }} 
+                            />
+                          </div>
+                          <span className="text-lg font-black text-yellow-400 tabular-nums shrink-0">{Math.round(prog.pct)}%</span>
+                        </div>
+                        <div className="text-sm text-neutral-400 font-mono mb-4">
+                          Score: <span className="text-amber-400 font-bold">{Math.round(score)}</span>
+                          {prog.target > 0 && <span> / <span className="text-yellow-400">{Math.round(prog.target)}</span> to advance</span>}
+                        </div>
+                      </>
+                    );
+                 })()}
+                 <div className="text-xs text-neutral-500 uppercase tracking-widest mb-2 border-t border-neutral-700 pt-3 mt-3">Objectives</div>
+                 <ul className="space-y-1.5">
+                   {getChapterTodos(currentChapter).map(t => (
+                     <li key={t.id} className={`flex items-center gap-2 text-sm ${t.done ? 'text-green-400' : 'text-neutral-300'}`}>
+                       <span className="shrink-0 w-5 h-5 flex items-center justify-center rounded bg-black/50 border border-neutral-700">
+                         {t.done ? <CheckCircle className="w-3.5 h-3.5 text-green-400" /> : <span className="text-neutral-500">○</span>}
+                       </span>
+                       <span className={t.done ? 'line-through opacity-80' : ''}>{String(t.label)}</span>
+                     </li>
+                   ))}
+                 </ul>
+              </div>
+            )}
+
+            {gameState === 'EPILOGUE' && (
+              <div className="bg-black/50 p-4 rounded-xl border border-fuchsia-700/50 mb-6 inline-block text-left w-full max-w-lg">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="flex-1 h-5 md:h-6 bg-neutral-800 rounded-full overflow-hidden border border-neutral-700">
+                    <div className="h-full w-full bg-gradient-to-r from-fuchsia-600 to-purple-500 rounded-full" />
+                  </div>
+                  <span className="text-lg font-black text-fuchsia-400 tabular-nums">100%</span>
+                </div>
+                <p className="text-sm text-neutral-400">Campaign complete. You are the true Sik San!</p>
               </div>
             )}
 
@@ -2955,7 +3105,30 @@ export default function App() {
             <div className={`absolute inset-0 bg-gradient-to-b ${NPC_CHARACTERS[npcEncounter.npc].bg} to-transparent opacity-30 pointer-events-none`} />
             
             <div className="relative z-10">
-              <div className="text-6xl md:text-7xl mb-4 drop-shadow-[0_10px_20px_rgba(0,0,0,0.8)]">{String(NPC_CHARACTERS[npcEncounter.npc].icon)}</div>
+              {/* Turkey vs Bull Tong comic panels (Ch5: The Heart of Wok Hei) */}
+              {npcEncounter.id === 'turkey_ch5' && (
+                <div className="flex gap-2 mb-6 justify-center flex-wrap">
+                  {[1, 2, 3].map((n) => (
+                    <img
+                      key={n}
+                      src={`/panels/turkey_bull_panel${n}.png`}
+                      alt={`Scene panel ${n}`}
+                      className="flex-1 min-w-0 max-w-[180px] md:max-w-[220px] rounded-xl border-2 border-neutral-700 shadow-lg object-cover object-top"
+                    />
+                  ))}
+                </div>
+              )}
+              {NPC_IMAGES[npcEncounter.npc] ? (
+                <div className="mb-4 flex justify-center">
+                  <img
+                    src={NPC_IMAGES[npcEncounter.npc]}
+                    alt={NPC_CHARACTERS[npcEncounter.npc].name}
+                    className="max-h-48 md:max-h-64 w-auto rounded-2xl border-2 border-neutral-700 shadow-[0_10px_30px_rgba(0,0,0,0.6)] object-contain"
+                  />
+                </div>
+              ) : (
+                <div className="text-6xl md:text-7xl mb-4 drop-shadow-[0_10px_20px_rgba(0,0,0,0.8)]">{String(NPC_CHARACTERS[npcEncounter.npc].icon)}</div>
+              )}
               <h3 className={`text-sm md:text-base font-bold uppercase tracking-[0.3em] ${NPC_CHARACTERS[npcEncounter.npc].color} mb-1`}>
                 {String(NPC_CHARACTERS[npcEncounter.npc].name)} <span className="opacity-60">{String(NPC_CHARACTERS[npcEncounter.npc].chName)}</span>
               </h3>
@@ -3066,9 +3239,10 @@ export default function App() {
           <div className="text-center bg-neutral-900 p-6 md:p-8 rounded-3xl border-2 border-yellow-700 max-w-3xl w-full shadow-2xl relative flex flex-col max-h-[90vh]">
             <button onClick={() => setShowShop(false)} className="absolute top-4 right-4 text-neutral-400 hover:text-white">✕</button>
             <h2 className="text-2xl md:text-4xl font-black text-yellow-500 mb-2 flex items-center justify-center gap-3"><ShoppingCart /> Kitchen Supplies</h2>
-            <div className="text-green-400 font-mono text-lg md:text-xl mb-6 bg-black/40 inline-block mx-auto px-4 py-2 rounded-full border border-green-900/50">
-               Wallet: ${Number(cash).toFixed(2)} <span className="text-xs text-neutral-500 ml-2">(Total Earned: ${Number(score).toFixed(2)})</span>
+            <div className="text-amber-400 font-mono text-sm md:text-base mb-1" title="Score and Cash">
+               Score: {Math.round(Number(score))} <span className="text-neutral-500">|</span> <span className="text-green-400">Cash: ${Number(cash).toFixed(2)}</span>
             </div>
+            <p className="text-[10px] text-neutral-500 mb-6">Spend Cash on upgrades.</p>
             
             <div className="overflow-y-auto custom-scrollbar flex-1 grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4 text-left px-2 pb-4">
                {UPGRADES.map(u => {
@@ -3138,13 +3312,13 @@ export default function App() {
                   <table className="w-full text-left border-collapse min-w-[600px]">
                     <thead>
                       <tr className="bg-neutral-800 text-neutral-400 text-xs uppercase tracking-widest border-b border-neutral-700">
-                        <th className="p-3">Dish</th>
-                        <th className="p-3">Ingredients Used</th>
-                        <th className="p-3 text-right">Cost</th>
-                        <th className="p-3 text-right">Base Price</th>
-                        <th className="p-3 text-right">Base Profit</th>
-                        <th className="p-3 text-right">旨味</th>
-                        <th className="p-3 text-right">🫒 Oil</th>
+                        <th className="p-3" title="Recipe name">Dish</th>
+                        <th className="p-3" title="Ingredients you need to add to the wok for this recipe">Ingredients Used</th>
+                        <th className="p-3 text-right" title="Money spent on ingredients (deducted from wallet when you add them)">Cost</th>
+                        <th className="p-3 text-right" title="Base order value before Wok Hei, Umami, combos, or oil bonuses. Actual serve revenue is usually higher.">Base Price</th>
+                        <th className="p-3 text-right" title="Base Price minus Cost. Real profit is higher with Wok Hei, good cook, and flavor combos.">Base Profit</th>
+                        <th className="p-3 text-right" title="Umami (旨味): average from ingredients. Higher = flavor bonus and more revenue.">旨味</th>
+                        <th className="p-3 text-right" title="Ideal oil % for this dish. Match it when serving for a bonus; too high = Too Greasy penalty.">🫒 Oil</th>
                       </tr>
                     </thead>
                     <tbody className="text-sm">
@@ -3252,15 +3426,23 @@ export default function App() {
               </div>
               <div>
                 <h3 className="text-lg font-bold text-white mb-1">3. The Wok Hei Meter</h3>
-                <p>Tossing food while the heat is <span className="text-orange-400 font-bold">over 80</span> builds the purple <span className="text-fuchsia-400 font-bold">WOK HEI</span> meter on the right. Maximize this before serving for massive profit multipliers and perfect star ratings!</p>
+                <p>Tossing food while the heat is <span className="text-orange-400 font-bold">over 80</span> builds the purple <span className="text-fuchsia-400 font-bold">WOK HEI</span> meter on the right. Maximize it before serving for big score and cash multipliers!</p>
               </div>
               <div>
                 <h3 className="text-lg font-bold text-white mb-1">4. Bulk Merging (High Risk/Reward)</h3>
                 <p>If two identical tickets appear, a flashing blue <span className="text-blue-400 font-bold">MERGE BULK</span> banner will appear. Click it to combine them! You must cook double the ingredients at once (max 25 items in the wok), but successfully serving a bulk order yields massive efficiency multipliers and huge tips!</p>
               </div>
               <div>
-                <h3 className="text-lg font-bold text-white mb-1">5. Economy & Soul</h3>
-                <p>Ingredients cost money, and spilling food out of the pan deducts cash instantly! Discover hidden <span className="text-yellow-400 font-bold">Flavor Combos</span> (e.g., Mushroom + Oyster Sauce + MSG) for huge bonuses. Or, hit <span className="text-cyan-400 font-bold">GIFT</span> to sacrifice your cash profit in exchange for rare Soul Points.</p>
+                <h3 className="text-lg font-bold text-white mb-1">5. Economy & Stats — Score, Cash, Profit, Customer Delight, Soul</h3>
+                <p className="mb-2">Understanding these five numbers is key:</p>
+                <ul className="list-disc list-inside space-y-1.5 text-neutral-300 mb-2">
+                  <li><span className="text-amber-400 font-bold">Score</span> — Increases when you SERVE. Drives story progress and chef rank.</li>
+                  <li><span className="text-green-400 font-bold">Cash</span> — Your wallet. Goes up with profit and tips; down when you buy ingredients or upgrades, spill, or GIFT.</li>
+                  <li><span className="text-yellow-400 font-bold">Profit</span> — From one serve: revenue minus ingredient cost. Added to Cash.</li>
+                  <li><span className="text-amber-300 font-bold">Customer Delight</span> — Bar from -10 (angry) to +10 (happy), starts at 0. +2 per good serve, -2 per failed order or burn (or -1 with Goose); game over at -10.</li>
+                  <li><span className="text-cyan-400 font-bold">Soul</span> — From GIFTing dishes. Used in story NPC encounters.</li>
+                </ul>
+                <p>Discover hidden <span className="text-yellow-400 font-bold">Flavor Combos</span> (e.g. Mushroom + Oyster Sauce + MSG) for huge score and cash bonuses!</p>
               </div>
               <div>
                 <h3 className="text-lg font-bold text-white mb-1">6. Umami & Custom Recipes</h3>
@@ -3268,7 +3450,7 @@ export default function App() {
               </div>
               <div>
                 <h3 className="text-lg font-bold text-white mb-1">7. Oiliness & Ideal Oil</h3>
-                <p>Each recipe has an <span className="text-yellow-400 font-bold">Ideal Oil</span> level shown on its ticket (🫒). Ingredients also have an <span className="text-yellow-400 font-bold">oiliness</span> rating that shifts the effective oil level. Match the ideal and get <span className="text-green-400 font-bold">Perfect Oil!</span> for a 1.25x bonus + tip. Go way over and customers will complain — <span className="text-red-400 font-bold">Too Greasy!</span> cuts your revenue and risks a reputation star.</p>
+                <p>Each recipe has an <span className="text-yellow-400 font-bold">Ideal Oil</span> level shown on its ticket (🫒). Ingredients also have an <span className="text-yellow-400 font-bold">oiliness</span> rating that shifts the effective oil level. Match the ideal and get <span className="text-green-400 font-bold">Perfect Oil!</span> for a 1.25x bonus + tip. Go way over and customers will complain — <span className="text-red-400 font-bold">Too Greasy!</span> cuts your revenue and can cost you a delight 😊.</p>
               </div>
             </div>
             <button onClick={() => setShowGuide(false)} className="mt-6 w-full py-3 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-bold uppercase tracking-widest text-white transition-transform active:scale-95">
@@ -3302,7 +3484,7 @@ export default function App() {
                         <div className="text-[10px] text-neutral-400 uppercase">{String(entry.title || '')}</div>
                       </div>
                     </div>
-                    <div className="font-mono text-green-400 font-bold text-lg">${Number(entry.score || 0).toFixed(2)}</div>
+                    <div className="font-mono text-green-400 font-bold text-lg">{Math.round(Number(entry.score || 0))}</div>
                   </div>
                 ))
               )}
@@ -3420,16 +3602,16 @@ export default function App() {
            <div className="text-center bg-neutral-900 p-8 rounded-3xl border border-red-900 max-w-md w-full shadow-2xl relative overflow-hidden">
             <AlertTriangle size={50} className="mx-auto text-red-500 mb-2" />
             <h2 className="text-3xl font-black mb-1 text-red-500 tracking-widest">KITCHEN CLOSED</h2>
-            <p className="text-neutral-400 text-sm mb-4">You ruined your 5-star reputation!</p>
+            <p className="text-neutral-400 text-sm mb-4">Customer delight hit -10 — the crowd has turned!</p>
             
-            <div className="bg-black/50 p-4 rounded-xl border border-neutral-800 mb-6">
-               <div className="text-sm text-neutral-400 uppercase tracking-widest mb-1">Final Earnings</div>
-               <div className="text-6xl font-mono text-green-400 mb-2">${Number(score).toFixed(2)}</div>
+            <div className="bg-black/50 p-4 rounded-xl border border-neutral-800 mb-6" title="Final score and rank">
+               <div className="text-sm text-neutral-400 uppercase tracking-widest mb-1" title="Final score">Final Earnings</div>
+               <div className="text-6xl font-mono text-green-400 mb-2" title="Score">{Math.round(Number(score))}</div>
                <div className="text-xs text-neutral-500 uppercase tracking-widest mt-2">Rank Achieved:</div>
-               <div className={`text-xl font-black ${finalTitle.color} mt-1 drop-shadow-md`}>{String(finalTitle.title)}</div>
+               <div className={`text-xl font-black ${finalTitle.color} mt-1 drop-shadow-md`} title="Chef rank">{String(finalTitle.title)}</div>
                
                {soul > 0 && (
-                 <div className="text-sm font-bold text-cyan-400 mt-3 flex items-center justify-center gap-1">
+                 <div className="text-sm font-bold text-cyan-400 mt-3 flex items-center justify-center gap-1" title="Soul earned by Gifting dishes. Used in NPC encounters for bonuses or story choices.">
                    <Heart size={16} fill="currentColor" /> {soul} Soul Collected
                  </div>
                )}
@@ -3446,7 +3628,7 @@ export default function App() {
                   maxLength={15} 
                   className="w-full p-3 rounded-lg bg-neutral-950 text-white border border-neutral-600 outline-none font-bold" 
                 />
-                <button onClick={submitScoreToLeaderboard} disabled={!playerName.trim()} className="w-full py-3 bg-yellow-600 hover:bg-yellow-500 disabled:bg-neutral-700 text-neutral-950 rounded-lg font-bold uppercase transition-all">Submit Score</button>
+                <button onClick={submitScoreToLeaderboard} disabled={!playerName.trim() || scoreSubmitting} className="w-full py-3 bg-yellow-600 hover:bg-yellow-500 disabled:bg-neutral-700 text-neutral-950 rounded-lg font-bold uppercase transition-all">{scoreSubmitting ? 'Submitting…' : 'Submit Score'}</button>
               </div>
             ) : null}
 
@@ -3467,7 +3649,51 @@ export default function App() {
       {/* --- MAIN GAMEPLAY UI --- */}
       <main className="flex-1 flex flex-col relative min-h-0" style={{ backgroundColor: '#0a0a0a' }}>
         {gameState === 'PLAYING' ? (
-          <GameLoop currentChapter={currentChapter} score={score} cash={cash} onRecipeSaved={(recipe) => setCustomRecipes(prev => [...prev, recipe])} isSandbox={!isStoryMode} />
+          <GameLoop currentChapter={currentChapter} score={score} cash={cash} setScore={setScore} setCash={setCash} delight={delight} setDelight={setDelight} onRecipeSaved={(recipe) => setCustomRecipes(prev => [...prev, recipe])} isSandbox={!isStoryMode} isRestaurantMode={isRestaurantMode} dailySpecialId={restaurantShiftConfig?.dailySpecialId} contracts={restaurantShiftConfig?.contracts} onShiftEnd={isRestaurantMode ? (stats) => {
+            const state = loadRestaurantState() || { xp: 0, daysOperated: 0, contractProgress: {}, completedToday: [], lastPlayedDate: new Date().toDateString() };
+            const contracts = restaurantShiftConfig?.contracts || [];
+            let addedXP = Math.floor((stats.score || 0) / 10);
+            const completedToday = [...(state.completedToday || [])];
+            const contractProgress = { ...(state.contractProgress || {}) };
+            const isComplete = (c, s) => {
+              if (c.type === 'serve_count') return s.dishesServed >= c.target;
+              if (c.type === 'earn_cash') return s.totalEarnedCash >= c.target;
+              if (c.type === 'no_burn') return c.target === 1 && !s.hadBurn;
+              if (c.type === 'max_combo') return s.maxCombo >= c.target;
+              if (c.type === 'perfect_serve') return s.perfectServes >= c.target;
+              if (c.type === 'gift_count') return s.giftsCount >= c.target;
+              if (c.type === 'special_serve') return s.specialServesCount >= c.target;
+              return false;
+            };
+            const getProgress = (c, s) => {
+              if (c.type === 'serve_count') return Math.min(s.dishesServed, c.target);
+              if (c.type === 'earn_cash') return Math.min(s.totalEarnedCash, c.target);
+              if (c.type === 'no_burn') return s.hadBurn ? 0 : 1;
+              if (c.type === 'max_combo') return Math.min(s.maxCombo, c.target);
+              if (c.type === 'perfect_serve') return Math.min(s.perfectServes, c.target);
+              if (c.type === 'gift_count') return Math.min(s.giftsCount, c.target);
+              if (c.type === 'special_serve') return Math.min(s.specialServesCount, c.target);
+              return 0;
+            };
+            contracts.forEach(c => {
+              contractProgress[c.id] = Math.max(contractProgress[c.id] ?? 0, getProgress(c, stats));
+              if (isComplete(c, stats) && !completedToday.includes(c.id)) {
+                completedToday.push(c.id);
+                addedXP += c.rewardXP || 0;
+              }
+            });
+            const today = new Date().toDateString();
+            saveRestaurantState({
+              xp: (state.xp || 0) + addedXP,
+              daysOperated: (state.daysOperated || 0) + (state.lastPlayedDate !== today ? 1 : 0),
+              lastPlayedDate: today,
+              contractProgress,
+              completedToday,
+            });
+            setGameState('RESTAURANT_HUB');
+            setIsRestaurantMode(false);
+            setRestaurantShiftConfig(null);
+          } : undefined} />
         ) : (
           <>
         <div className="absolute top-1/4 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-50 pointer-events-none flex flex-col items-center gap-2">
@@ -3482,60 +3708,73 @@ export default function App() {
         <div className="flex flex-col w-full z-10 relative">
           
           {duplicateNames.length > 0 ? (
-             <div className="w-full bg-blue-900 border-b border-blue-700 py-1 px-4 flex justify-center items-center gap-2 md:gap-4 text-[10px] md:text-sm tracking-widest uppercase text-white shadow-[0_0_15px_rgba(59,130,246,0.5)]">
-                 <span className="animate-pulse text-blue-200">Duplicates Detected!</span>
-                 <button onClick={() => handleMergeOrders(duplicateNames[0])} className="bg-yellow-500 hover:bg-yellow-400 text-black font-black px-2 md:px-4 py-0.5 md:py-1 rounded shadow-lg active:scale-95 transition-transform flex items-center gap-1 border-b-2 border-yellow-700 active:border-b-0 active:translate-y-px">
+             <div className="w-full bg-blue-900 border-b border-blue-700 py-1 px-4 flex justify-center items-center gap-2 md:gap-4 text-[10px] md:text-sm tracking-widest uppercase text-white shadow-[0_0_15px_rgba(59,130,246,0.5)]" title="You have multiple orders for the same dish. Merge them to cook once and serve all.">
+                 <span className="animate-pulse text-blue-200">Multiple similar orders detected!</span>
+                 <button onClick={() => handleMergeOrders(duplicateNames[0])} className="bg-yellow-500 hover:bg-yellow-400 text-black font-black px-2 md:px-4 py-0.5 md:py-1 rounded shadow-lg active:scale-95 transition-transform flex items-center gap-1 border-b-2 border-yellow-700 active:border-b-0 active:translate-y-px" title="Merge duplicate orders into one bulk order for more profit">
                      MERGE BULK {String(duplicateNames[0]).toUpperCase()}
                  </button>
              </div>
           ) : (
-             <div className={`w-full bg-neutral-950/80 border-b border-[#111] py-1 px-4 flex justify-center items-center text-xs md:text-sm tracking-widest uppercase transition-colors duration-300 ${dynPrompt.color}`}>
+             <div className={`w-full bg-neutral-950/80 border-b border-[#111] py-1 px-4 flex justify-center items-center text-xs md:text-sm tracking-widest uppercase transition-colors duration-300 ${dynPrompt.color}`} title="Current tip or status. Follow prompts to cook and serve well.">
                 {String(dynPrompt.text)}
              </div>
           )}
 
-          <div className={`shrink-0 bg-[#1a1a1c] border-b-4 border-[#111] flex overflow-x-auto shadow-inner custom-scrollbar ${viewport.isLandscape ? 'h-16 md:h-24 p-1.5 md:p-2 gap-2 md:gap-3' : 'h-24 md:h-28 p-2 md:p-3 gap-3 md:gap-4'}`}>
-            <button onClick={forceNextOrder} disabled={orders.length >= 3} className={`h-full flex flex-col items-center justify-center border-2 border-dashed border-neutral-700 rounded-lg text-neutral-500 hover:text-white transition-all shrink-0 ${viewport.isLandscape ? 'min-w-[60px] md:min-w-[80px]' : 'min-w-[70px] md:min-w-[90px]'}`}>
-              <Plus className={`${viewport.isLandscape ? 'w-4 h-4 md:w-6 md:h-6' : 'w-6 h-6 md:w-8 md:h-8'}`} />
-              <span className="text-[8px] md:text-[10px] uppercase font-bold text-center leading-tight">Next</span>
+          <div className={`shrink-0 bg-[#1a1a1c] border-b-4 border-[#111] flex overflow-x-auto shadow-inner custom-scrollbar ${viewport.isLandscape ? 'h-20 md:h-28 p-2 md:p-2.5 gap-2.5 md:gap-3' : 'h-28 md:h-36 p-2.5 md:p-3 gap-3 md:gap-4'}`}>
+            <button onClick={forceNextOrder} disabled={orders.length >= 3} className={`h-full flex flex-col items-center justify-center border-2 border-dashed border-neutral-700 rounded-lg text-neutral-500 hover:text-white transition-all shrink-0 ${viewport.isLandscape ? 'min-w-[72px] md:min-w-[96px]' : 'min-w-[80px] md:min-w-[100px]'}`} title={orders.length >= 3 ? "Maximum 3 orders at once" : "Next order will appear here"}>
+              <Plus className={`${viewport.isLandscape ? 'w-5 h-5 md:w-7 md:h-7' : 'w-7 h-7 md:w-9 md:h-9'}`} />
+              <span className="text-[9px] md:text-[11px] uppercase font-bold text-center leading-tight">Next</span>
             </button>
 
             {orders.map(order => {
               const urgency = order.timeLeft / order.timeLimit;
               const isSpecial = !!order.specialEvent;
               const isMerged = !!order.isMerged;
-              const ticketColor = order.failed ? 'bg-red-950 border-red-800 text-red-400' : 
+              const ticketColor = order.failed ? 'bg-red-950 border-red-800 text-red-400' :
                                   isMerged ? 'bg-blue-900 border-blue-400 text-blue-100 shadow-[0_0_15px_rgba(59,130,246,0.3)]' :
-                                  urgency < 0.25 ? 'bg-red-100 border-red-500 text-red-900 animate-pulse' : 
+                                  urgency < 0.25 ? 'bg-red-100 border-red-500 text-red-900 animate-pulse' :
                                   isSpecial ? order.specialEvent.color :
                                   urgency < 0.5 ? 'bg-yellow-50 border-yellow-400 text-yellow-900' : 'bg-white border-neutral-300 text-neutral-900';
               return (
-                <div key={order.id} className={`rounded-lg shadow-lg border-2 ${ticketColor} relative flex flex-row items-center shrink-0 ${viewport.isLandscape ? 'min-w-[160px] md:min-w-[220px] p-1.5 md:p-2 gap-1.5 md:gap-3' : 'min-w-[180px] md:min-w-[260px] p-2 md:p-2.5 gap-2 md:gap-3'}`}>
+                <div
+                  key={order.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => bringOrderToFront(order.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') bringOrderToFront(order.id);
+                  }}
+                  className={`rounded-lg shadow-lg border-2 ${ticketColor} relative flex flex-row items-center shrink-0 cursor-pointer ${viewport.isLandscape ? 'min-w-[180px] md:min-w-[250px] p-2 md:p-2.5 gap-2 md:gap-3' : 'min-w-[200px] md:min-w-[280px] p-2.5 md:p-3 gap-2.5 md:gap-3'}`}
+                  title={`Order: ${order.name}. Tap to bring this ticket to the front (timer stays the same).`}
+                >
                   {isSpecial && !order.failed && !isMerged && (
-                     <div className="absolute -top-3 -right-3 md:-top-4 md:-right-4 bg-black text-white text-[7px] md:text-[9px] font-black px-1.5 md:px-2 py-0.5 md:py-1 rounded-full border border-current z-20 flex items-center gap-1 shadow-lg transform rotate-6 whitespace-nowrap">
+                     <div className="absolute -top-3 -right-3 md:-top-4 md:-right-4 bg-black text-white text-[8px] md:text-[10px] font-black px-1.5 md:px-2 py-0.5 md:py-1 rounded-full border border-current z-20 flex items-center gap-1 shadow-lg transform rotate-6 whitespace-nowrap">
                         <span>{String(order.specialEvent.icon)}</span> {String(order.specialEvent.name)}
                      </div>
                   )}
                   {isMerged && !order.failed && (
-                     <div className="absolute -top-3 -right-3 md:-top-4 md:-right-4 bg-yellow-500 text-black text-[7px] md:text-[9px] font-black px-2 py-0.5 md:py-1 rounded-full border border-black z-20 flex items-center gap-1 shadow-lg transform rotate-6 whitespace-nowrap">
+                     <div className="absolute -top-3 -right-3 md:-top-4 md:-right-4 bg-yellow-500 text-black text-[8px] md:text-[10px] font-black px-2 py-0.5 md:py-1 rounded-full border border-black z-20 flex items-center gap-1 shadow-lg transform rotate-6 whitespace-nowrap">
                         BULK x{order.batchSize}
                      </div>
                   )}
                   <DishIcon type={order.dishType} icons={order.displayIcons} isLandscape={viewport.isLandscape} />
                   <div className="flex flex-col justify-center min-w-0 flex-1 text-left">
-                    <div className={`font-bold leading-tight truncate w-full ${viewport.isLandscape ? 'text-[9px] md:text-xs mb-0' : 'text-[11px] md:text-sm lg:text-base mb-1'}`}>{String(order.name)}</div>
+                    <div className={`font-bold leading-tight truncate w-full ${viewport.isLandscape ? 'text-xs md:text-sm mb-0' : 'text-sm md:text-base lg:text-lg mb-1'}`}>{String(order.name)}</div>
                     <div className={`flex flex-wrap bg-black/10 rounded-md w-full ${viewport.isLandscape ? 'gap-0.5 mt-0 px-1 py-0.5' : 'gap-1 mt-0.5 md:mt-1 px-1.5 py-1'}`}>
                       {order.requires.map((req, i) => (
-                        <span key={req + i} className={`${viewport.isLandscape ? 'text-[10px] md:text-xs' : 'text-xs md:text-sm'} drop-shadow-md leading-none`} title={ALL_ITEMS[req].name}>{String(ALL_ITEMS[req].icon)}</span>
+                        <span key={req + i} className={`${viewport.isLandscape ? 'text-xs md:text-sm' : 'text-sm md:text-base'} drop-shadow-md leading-none`} title={ALL_ITEMS[req].name}>{String(ALL_ITEMS[req].icon)}</span>
                       ))}
                     </div>
                   </div>
-                  <div className="absolute bottom-0 left-0 right-0 h-1 md:h-1.5 bg-black/20 overflow-hidden rounded-b-lg">
+                  <div className="absolute bottom-0 left-0 right-0 h-1.5 md:h-2 bg-black/20 overflow-hidden rounded-b-lg">
                     <div className={`h-full ${urgency < 0.25 ? 'bg-red-500' : isMerged ? 'bg-blue-400' : 'bg-green-500'}`} style={{ width: `${Math.max(0, urgency * 100)}%` }} />
                   </div>
                 </div>
               );
             })}
+          </div>
+          <div className="shrink-0 bg-[#1a1a1c] border-b border-[#111] py-1 px-3 flex justify-center items-center text-[10px] md:text-xs text-neutral-500 tracking-wide" title="Tap any order ticket to move it to the front of the queue; its countdown stays the same so you can prioritise.">
+            Tap an order to bring it to the front — timer unchanged.
           </div>
         </div>
 
@@ -3546,7 +3785,7 @@ export default function App() {
           <div className={`flex flex-row justify-center gap-1.5 md:gap-3 h-full z-20 shrink-0 ${viewport.isLandscape ? 'w-28 md:w-40 max-h-[90%]' : 'w-32 md:w-48 max-h-80 md:max-h-[650px] lg:max-h-[700px]'}`}>
             
             {/* Heat Slider */}
-            <div className={`w-1/2 bg-neutral-900 rounded-full flex flex-col items-center border border-neutral-800 relative flex-1 min-h-0 py-4 md:py-8`}>
+            <div className={`w-1/2 bg-neutral-900 rounded-full flex flex-col items-center border border-neutral-800 relative flex-1 min-h-0 py-4 md:py-8`} title="Drag to set burner heat. High heat cooks faster but fills the Burn meter quicker. Keep heat above 80 and toss to build Wok Hei.">
               <div className={`font-black text-[8px] md:text-xs mb-2 md:mb-6 z-10 pointer-events-none transition-colors ${heatLevel > 80 ? 'text-red-500 animate-pulse' : 'text-neutral-500'}`}>HEAT</div>
               <div className="relative flex-1 w-full flex justify-center cursor-ns-resize touch-none" onPointerDown={handleHeatPointer} onPointerMove={handleHeatPointer}>
                 <div className="w-2 md:w-3 h-full bg-black rounded-full overflow-hidden relative shadow-inner pointer-events-none">
@@ -3563,12 +3802,24 @@ export default function App() {
             </div>
 
             {/* Oil Squeeze Bottle */}
-            <div className={`w-1/2 bg-neutral-900/60 rounded-full flex flex-col items-center border border-yellow-900/50 relative flex-1 min-h-0 py-4 md:py-8 shadow-[inset_0_0_20px_rgba(234,179,8,0.05)]`}>
+            <div className={`w-1/2 bg-neutral-900/60 rounded-full flex flex-col items-center border border-yellow-900/50 relative flex-1 min-h-0 py-4 md:py-8 shadow-[inset_0_0_20px_rgba(234,179,8,0.05)]`} title="Oil level. Hold the bottle button below to add oil. Needed for Wok Hei and to avoid dry burn.">
               <div className={`font-black text-[8px] md:text-xs mb-2 md:mb-6 z-10 pointer-events-none transition-colors ${oilLevel < 20 ? 'text-red-500 animate-pulse' : oilLevel > 75 ? 'text-orange-400' : 'text-yellow-500'}`}>OIL</div>
               <div className="relative flex-1 w-full flex justify-center">
                 <div className="w-2 md:w-3 h-full bg-black rounded-full overflow-hidden relative shadow-inner">
                   <div className={`absolute bottom-0 w-full transition-all duration-100 bg-gradient-to-t from-yellow-600 to-yellow-300 ${oilLevel > 75 ? 'animate-pulse' : ''}`} style={{ height: `${oilLevel}%` }} />
                 </div>
+                {orders?.[0]?.idealOil != null && !orders?.[0]?.failed && (
+                  <div
+                    className="absolute left-1/2 -translate-x-1/2 flex items-center pointer-events-none"
+                    style={{ bottom: `calc(${Math.max(0, Math.min(100, orders[0].idealOil))}% - 1px)` }}
+                    title={`Optimal oil for "${String(orders[0].name)}": ${Math.round(orders[0].idealOil)}%`}
+                  >
+                    <div className="w-2 md:w-3 h-[2px] bg-cyan-200 shadow-[0_0_8px_rgba(34,211,238,0.6)] rounded-full" />
+                    <div className="ml-1 text-[7px] md:text-[9px] font-black text-cyan-200 whitespace-nowrap drop-shadow-sm">
+                      OPT {Math.round(orders[0].idealOil)}%{oilLevel < orders[0].idealOil ? ` (+${Math.round(orders[0].idealOil - oilLevel)}%)` : ''}
+                    </div>
+                  </div>
+                )}
               </div>
               
               {/* Squeeze Action Button */}
@@ -3577,6 +3828,7 @@ export default function App() {
                  onPointerUp={() => setIsOiling(false)} 
                  onPointerLeave={() => setIsOiling(false)} 
                  className={`absolute bottom-2 md:bottom-4 w-10 md:w-16 h-10 md:h-16 rounded-full flex items-center justify-center transition-all shadow-xl border-b-4 active:border-b-0 active:translate-y-1 ${oilLevel < 20 ? 'bg-red-900 border-red-950 animate-pulse' : oilLevel > 75 ? 'bg-orange-800 border-orange-950' : 'bg-yellow-600 border-yellow-800 hover:bg-yellow-500'}`}
+                 title="Hold to add oil to the wok. Adds about 6% per second."
               >
                   <Droplets className={`w-4 h-4 md:w-6 md:h-6 ${oilLevel < 20 ? 'text-red-400' : 'text-yellow-100'}`} />
               </button>
@@ -3586,7 +3838,7 @@ export default function App() {
 
           <div className="flex-1 h-full min-h-0 min-w-0 flex flex-col items-center justify-center relative mx-1 md:mx-2">
             <div className="absolute top-0 w-full flex justify-between items-start px-2 md:px-8 z-20 pointer-events-none transition-opacity duration-300" style={{ opacity: wokContents.length > 0 ? 1 : 0}}>
-              <div className={`w-20 md:w-40 bg-black/60 rounded-lg border border-neutral-800 backdrop-blur-md ${viewport.isLandscape ? 'p-1.5 md:p-2' : 'p-2 md:p-3'}`}>
+              <div className={`w-20 md:w-40 bg-black/60 rounded-lg border border-neutral-800 backdrop-blur-md ${viewport.isLandscape ? 'p-1.5 md:p-2' : 'p-2 md:p-3'}`} title="Cook progress. Serve when this is high (green) and Burn is low. High heat + tossing fills it faster.">
                 <div className="flex justify-between text-[8px] md:text-xs mb-0.5 md:mb-1 font-bold uppercase tracking-wider text-neutral-400">
                   <span>Cook</span>
                   <span className={cookProgress > 90 ? 'text-green-400' : 'text-white'}>{Math.floor(cookProgress)}%</span>
@@ -3596,14 +3848,14 @@ export default function App() {
                 </div>
               </div>
 
-              <div className={`bg-black/60 rounded-lg border backdrop-blur-md flex flex-col items-center ${wokUmami.avg >= 3 ? 'border-amber-700/60' : 'border-neutral-800'} ${viewport.isLandscape ? 'p-1 md:p-1.5' : 'p-1.5 md:p-2'}`}>
+              <div className={`bg-black/60 rounded-lg border backdrop-blur-md flex flex-col items-center ${wokUmami.avg >= 3 ? 'border-amber-700/60' : 'border-neutral-800'} ${viewport.isLandscape ? 'p-1 md:p-1.5' : 'p-1.5 md:p-2'}`} title="Umami (旨味). Average from your ingredients. Higher = flavor bonus and revenue boost.">
                 <div className="text-[7px] md:text-[10px] font-black uppercase tracking-wider text-amber-500">旨味</div>
                 <div className={`text-sm md:text-lg font-mono font-black ${wokUmami.avg >= 3 ? 'text-amber-300' : wokUmami.avg >= 2 ? 'text-amber-400' : 'text-neutral-500'}`}>
                   {wokUmami.avg.toFixed(1)}
                 </div>
               </div>
 
-              <div className={`w-20 md:w-40 bg-black/60 rounded-lg border border-neutral-800 backdrop-blur-md ${viewport.isLandscape ? 'p-1.5 md:p-2' : 'p-2 md:p-3'}`}>
+              <div className={`w-20 md:w-40 bg-black/60 rounded-lg border border-neutral-800 backdrop-blur-md ${viewport.isLandscape ? 'p-1.5 md:p-2' : 'p-2 md:p-3'}`} title="Burn meter. Don't let it hit 100% or the dish is ruined. Toss regularly and avoid max heat + lots of oil to slow burn.">
                 <div className="flex justify-between text-[8px] md:text-xs mb-0.5 md:mb-1 font-bold uppercase tracking-wider text-neutral-400">
                   <span>Burn</span>
                   <span className={burnProgress > 75 ? 'text-red-500 animate-pulse' : 'text-white'}>{Math.floor(burnProgress)}%</span>
@@ -3614,28 +3866,67 @@ export default function App() {
               </div>
             </div>
 
-            <div className={`absolute right-0 transform -translate-y-1/2 flex flex-col items-center z-20 ${viewport.isLandscape ? 'top-[60%]' : 'top-1/2'}`}>
+            <div className={`absolute right-0 flex flex-col items-center z-20 ${viewport.isLandscape ? 'top-[5%] bottom-[5%]' : 'top-1/2 -translate-y-1/2'}`} title="Wok Hei. Build by tossing at high heat (80+) with oil. Boosts revenue when high. Drops if you stop tossing.">
               <div 
                 className={`text-[8px] md:text-[10px] font-black mb-1 md:mb-2 text-fuchsia-500 tracking-widest ${wokHei > 80 ? 'animate-pulse drop-shadow-[0_0_5px_rgba(217,70,239,0.8)]' : 'opacity-50'}`} 
                 style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
               >
                 WOK HEI
               </div>
-              <div className={`bg-black/50 border border-neutral-800 rounded-full overflow-hidden shadow-2xl flex flex-col justify-end backdrop-blur-sm transition-colors ${viewport.isLandscape ? 'w-4 md:w-8 h-32 md:h-64' : 'w-6 md:w-10 h-48 md:h-80'} ${wokHei > 80 ? 'border-fuchsia-500/50 shadow-[0_0_30px_rgba(217,70,239,0.4)]' : ''}`}>
+              <div className={`bg-black/50 border border-neutral-800 rounded-full overflow-hidden shadow-2xl flex flex-col justify-end backdrop-blur-sm transition-colors flex-1 min-h-0 ${viewport.isLandscape ? 'w-4 md:w-8 h-full' : 'w-6 md:w-10 h-80 md:h-[650px] lg:h-[700px]'} ${wokHei > 80 ? 'border-fuchsia-500/50 shadow-[0_0_30px_rgba(217,70,239,0.4)]' : ''}`}>
                 <div className="w-full transition-all duration-200 bg-gradient-to-t from-indigo-900 to-fuchsia-400 relative" style={{ height: `${wokHei}%` }}>
                   {wokHei > 80 && <div className="absolute inset-0 bg-white/20 animate-pulse" />}
                 </div>
               </div>
             </div>
 
+            <div className="flex flex-1 min-w-0 w-full flex-row items-center justify-center gap-2 md:gap-4">
+              <div className="flex-1 min-w-0 h-full flex items-center justify-center">
             <canvas ref={canvasRef} width={400} height={400} className="w-full h-full max-w-[65vw] md:max-w-none object-contain block drop-shadow-2xl z-10" />
+              </div>
+              {orders?.[0] && !orders[0].failed && (() => {
+                const order = orders[0];
+                const reqMap = {};
+                order.requires.forEach(req => { reqMap[req] = (reqMap[req] || 0) + 1; });
+                const wokFreq = {};
+                wokContents.forEach(id => { wokFreq[id] = (wokFreq[id] || 0) + 1; });
+                const totalRemaining = Object.keys(reqMap).reduce((sum, id) => sum + Math.max(0, (reqMap[id] || 0) - (wokFreq[id] || 0)), 0);
+                return (
+                  <div className="shrink-0 bg-black/70 rounded-xl border border-neutral-700 p-4 md:p-6 max-h-[85%] overflow-y-auto custom-scrollbar z-10" title="Ingredients needed for current order. ✓ enough added, ✗ over-added.">
+                    <div className="text-xs md:text-sm font-black text-neutral-400 uppercase tracking-wider mb-2">Current order</div>
+                    <div className="text-sm md:text-base text-amber-400 font-bold mb-3 truncate max-w-[270px] md:max-w-[360px]" title={order.name}>{order.name}</div>
+                    <div className="text-xs md:text-sm text-neutral-300 font-bold mb-4">Remaining: <span className={totalRemaining === 0 ? 'text-green-400' : 'text-amber-400'}>{totalRemaining}</span></div>
+                    <ul className="space-y-2">
+                      {Object.entries(reqMap).map(([id, needed]) => {
+                        const current = wokFreq[id] || 0;
+                        const remaining = Math.max(0, needed - current);
+                        const isSufficient = current >= needed;
+                        const isOver = current > needed;
+                        const item = ALL_ITEMS[id];
+                        if (!item) return null;
+                        return (
+                          <li key={id} className="flex items-center gap-3 text-sm md:text-base">
+                            <span className="text-2xl leading-none shrink-0">{item.icon}</span>
+                            <span className="flex-1 min-w-0 truncate text-neutral-200" title={item.name}>{item.name}</span>
+                            <span className="text-neutral-500 shrink-0 tabular-nums">{current}/{needed}</span>
+                            {isSufficient && !isOver && <CheckCircle className="w-7 h-7 shrink-0 text-green-500" aria-label="enough" />}
+                            {isOver && <X className="w-7 h-7 shrink-0 text-red-500" aria-label="over-added" />}
+                            {!isSufficient && <span className="text-amber-400 shrink-0 tabular-nums">−{remaining}</span>}
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                );
+              })()}
+            </div>
           </div>
 
           {/* Right Column: Rockers & Serve */}
-          <div className={`flex flex-col justify-center z-20 shrink-0 h-full ${viewport.isLandscape ? 'gap-1.5 w-20 md:w-28 max-h-[90%]' : 'gap-2 md:gap-4 w-20 md:w-32 max-h-72 md:max-h-[550px] lg:max-h-[600px]'}`}>
+          <div className={`flex flex-col justify-center z-20 shrink-0 h-full ${viewport.isLandscape ? 'gap-1.5 w-40 md:w-56 max-h-[90%]' : 'gap-2 md:gap-4 w-40 md:w-64 max-h-72 md:max-h-[550px] lg:max-h-[600px]'}`}>
             
             {/* 2D Elliptical Toss Pad */}
-            <div className={`flex flex-col flex-1 bg-neutral-900/80 rounded-[40px] border border-blue-900/50 relative shadow-[inset_0_0_20px_rgba(59,130,246,0.05)] min-h-0 py-4 md:py-6 px-1.5 md:px-3`}>
+            <div className={`flex flex-col flex-1 bg-neutral-900/80 rounded-[40px] border border-blue-900/50 relative shadow-[inset_0_0_20px_rgba(59,130,246,0.05)] min-h-0 py-4 md:py-6 px-1.5 md:px-3`} title="Drag to toss the wok. Tossing slows the Burn meter and builds Wok Hei when heat is above 80. Toss regularly to avoid burning.">
                 <div className={`font-black text-[8px] md:text-xs mb-1 md:mb-2 z-10 pointer-events-none text-center transition-colors ${toss.x !== 0 || toss.y !== 0 ? 'text-blue-400 drop-shadow-[0_0_5px_rgba(96,165,250,0.8)]' : 'text-neutral-500'}`}>TOSS</div>
                 
                 <div 
@@ -3667,26 +3958,26 @@ export default function App() {
             </div>
 
             {/* Standardized 2x2 Tactile Action Grid (Forced equal widths) */}
-            <div className={`grid grid-cols-2 w-full shrink-0 ${viewport.isLandscape ? 'gap-1 h-12 md:h-14' : 'gap-1 md:gap-2 h-14 md:h-16'}`}>
-              <button onClick={handleTrash} className="w-full h-full bg-neutral-800 hover:bg-neutral-700 border-black border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-red-500 flex flex-col items-center justify-center transition-all text-[8px] md:text-[10px] shadow-lg tracking-wider overflow-hidden">
+            <div className={`grid grid-cols-2 w-full shrink-0 min-w-0 ${viewport.isLandscape ? 'gap-1.5 md:gap-2 h-14 md:h-16' : 'gap-2 md:gap-3 h-16 md:h-20'}`}>
+              <button onClick={handleTrash} className="w-full min-w-0 h-full bg-neutral-800 hover:bg-neutral-700 border-black border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-red-500 flex flex-col items-center justify-center transition-all text-[9px] md:text-xs shadow-lg tracking-wider overflow-hidden" title="Discard everything in the wok. Resets your combo. Use when you burn or need to start over.">
                 <Trash2 className="w-4 h-4 md:w-5 md:h-5 mb-0.5 shrink-0" /> TRASH
               </button>
-              <button onPointerDown={() => { if(wokContents.length === 0) setIsCleaning(true); }} onPointerUp={handleCleanRelease} onPointerLeave={handleCleanRelease} disabled={wokContents.length > 0} className="w-full h-full bg-blue-800 hover:bg-blue-700 border-blue-950 border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-white flex flex-col items-center justify-center transition-all text-[8px] md:text-[10px] disabled:opacity-30 shadow-lg tracking-wider overflow-hidden">
+              <button onPointerDown={() => { if(wokContents.length === 0) setIsCleaning(true); }} onPointerUp={handleCleanRelease} onPointerLeave={handleCleanRelease} disabled={wokContents.length > 0} className="w-full min-w-0 h-full bg-blue-800 hover:bg-blue-700 border-blue-950 border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-white flex flex-col items-center justify-center transition-all text-[9px] md:text-xs disabled:opacity-30 shadow-lg tracking-wider overflow-hidden" title="Clean the wok with water. Only works when the wok is empty. Reduces residue.">
                 <Droplets className="w-4 h-4 md:w-5 md:h-5 mb-0.5 shrink-0" /> CLEAN
               </button>
             </div>
             
-            <div className={`grid grid-cols-2 w-full shrink-0 ${viewport.isLandscape ? 'gap-1 h-12 md:h-14' : 'gap-1 md:gap-2 h-14 md:h-16'}`}>
-                <button onClick={() => serveDish(true)} className={`w-full h-full bg-cyan-800 hover:bg-cyan-700 border-cyan-950 border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-cyan-100 flex flex-col items-center justify-center transition-all shadow-xl text-[8px] md:text-[10px] tracking-wider overflow-hidden`}>
-                  <Heart className="w-4 h-4 md:w-5 md:h-5 mb-0.5 shrink-0" /> GIFT
-                </button>
-                <button onClick={() => serveDish(false)} className={`w-full h-full bg-green-600 hover:bg-green-500 border-green-900 border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-white flex flex-col items-center justify-center transition-all shadow-xl text-[8px] md:text-[10px] tracking-wider overflow-hidden`}>
-                  <CheckCircle className="w-4 h-4 md:w-5 md:h-5 mb-0.5 shrink-0" /> SERVE
-                </button>
+            <div className={`grid grid-cols-2 w-full shrink-0 min-w-0 ${viewport.isLandscape ? 'gap-1.5 md:gap-2 h-14 md:h-16' : 'gap-2 md:gap-3 h-16 md:h-20'}`}>
+              <button onClick={() => serveDish(true)} className={`w-full min-w-0 h-full bg-cyan-800 hover:bg-cyan-700 border-cyan-950 border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-cyan-100 flex flex-col items-center justify-center transition-all shadow-xl text-[9px] md:text-xs tracking-wider overflow-hidden`} title="Gift: Donate the dish for Soul instead of cash. No order match required. Costs ingredient value.">
+                <Heart className="w-4 h-4 md:w-5 md:h-5 mb-0.5 shrink-0" /> GIFT
+              </button>
+              <button onClick={() => serveDish(false)} className={`w-full min-w-0 h-full bg-green-600 hover:bg-green-500 border-green-900 border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-white flex flex-col items-center justify-center transition-all shadow-xl text-[9px] md:text-xs tracking-wider overflow-hidden`} title="Serve the dish to a matching order for cash. Match the ticket ingredients and cook well for best pay.">
+                <CheckCircle className="w-4 h-4 md:w-5 md:h-5 mb-0.5 shrink-0" /> SERVE
+              </button>
             </div>
 
             {wokContents.length > 0 && (
-              <button onClick={() => { setNewRecipeName(''); setShowSaveRecipe(true); }} className={`w-full shrink-0 bg-amber-900/80 hover:bg-amber-800 border-amber-950 border-b-2 active:border-b-0 active:translate-y-0.5 rounded-xl font-bold text-amber-200 flex items-center justify-center gap-1 transition-all shadow-lg text-[8px] md:text-[10px] tracking-wider ${viewport.isLandscape ? 'h-8' : 'h-9 md:h-10'}`}>
+              <button onClick={() => { setNewRecipeName(''); setShowSaveRecipe(true); }} className={`w-full shrink-0 bg-amber-900/80 hover:bg-amber-800 border-amber-950 border-b-2 active:border-b-0 active:translate-y-0.5 rounded-xl font-bold text-amber-200 flex items-center justify-center gap-1 transition-all shadow-lg text-[8px] md:text-[10px] tracking-wider ${viewport.isLandscape ? 'h-8' : 'h-9 md:h-10'}`} title="Save current wok contents as a custom recipe for quick re-cook later.">
                 <BookOpen className="w-3 h-3 md:w-4 md:h-4" /> SAVE
               </button>
             )}
@@ -3698,7 +3989,7 @@ export default function App() {
         <div className={`shrink-0 bg-[#151517] border-t-4 border-[#0a0a0c] w-full z-20 relative shadow-[0_-10px_30px_rgba(0,0,0,0.8)] ${viewport.isLandscape ? 'p-1' : 'p-2'}`}>
           <div className="flex flex-wrap justify-center items-stretch gap-1 md:gap-2 max-w-7xl mx-auto">
             {CATEGORIES.map(cat => (
-              <div key={cat.id} className="flex flex-col bg-neutral-900/40 rounded-xl p-1 md:p-1.5 border border-neutral-800/60 shadow-inner">
+              <div key={cat.id} className="flex flex-col bg-neutral-900/40 rounded-xl p-1 md:p-1.5 border border-neutral-800/60 shadow-inner" title={`Click an ingredient to add it to the wok. Cost and umami shown on hover.`}>
                 <div className="text-[7px] md:text-[9px] text-neutral-500 font-black uppercase tracking-widest text-center mb-1">
                   {cat.name}
                 </div>
@@ -3711,7 +4002,7 @@ export default function App() {
                         onClick={() => addIngredient(item.id)} 
                         disabled={!isUnlocked(item.id) || wokContents.length >= 25 || burnProgress >= 100} 
                         title={`${item.name} $${item.cost.toFixed(2)} | Umami ${item.umami}/5`}
-                        className={`rounded-lg flex flex-col items-center justify-center transition-all ${item.color} ${item.text || 'text-neutral-900'} border-b-2 md:border-b-4 border-black/30 shadow-md ${viewport.isLandscape ? 'w-[32px] md:w-[48px] h-8 md:h-12' : 'w-[40px] md:w-[56px] h-10 md:h-14'} ${!isUnlocked(item.id) ? 'opacity-20 grayscale' : 'disabled:opacity-30 disabled:grayscale hover:brightness-110 active:border-b-0 active:translate-y-1'}`}
+                        className={`rounded-lg flex flex-col items-center justify-center transition-all bg-black ${item.text || 'text-neutral-100'} border-2 md:border-[3px] shadow-md ${viewport.isLandscape ? 'w-[53px] md:w-[73px] h-8 md:h-12' : 'w-[64px] md:w-[87px] h-10 md:h-14'} ${item.color ? item.color.replace('bg-', 'border-') : 'border-neutral-600'} ${!isUnlocked(item.id) ? 'opacity-20 grayscale' : 'disabled:opacity-30 disabled:grayscale hover:brightness-110 active:translate-y-1'}`}
                       >
                         <span className={`${viewport.isLandscape ? 'text-lg md:text-2xl' : 'text-xl md:text-3xl'} leading-none filter drop-shadow-sm`}>
                           {String(item.icon)}

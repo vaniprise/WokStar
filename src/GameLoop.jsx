@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { STORY_CHAPTERS, ALL_ITEMS, RECIPES, SPECIAL_EVENTS, FLAVOR_COMBOS, getScoreTitle } from './gameData';
-import { Trash2, Droplets, Heart, CheckCircle, Plus, BookOpen, ChefHat } from 'lucide-react';
+import { Trash2, Droplets, Heart, CheckCircle, Plus, BookOpen, ChefHat, Flag, X } from 'lucide-react';
 import {
   initAudio,
   updateBurner,
@@ -31,7 +31,7 @@ const DIFF_MULTS = {
 };
 
 const DishIcon = ({ type, icons }) => (
-  <div className="relative flex items-center justify-center shrink-0 w-12 h-12">
+  <div className="relative flex items-center justify-center shrink-0 w-10 h-10">
     {type === 'plate' ? (
       <svg viewBox="0 0 100 100" className="absolute inset-0 w-full h-full drop-shadow-md">
         <ellipse cx="50" cy="55" rx="45" ry="30" fill="#f8f9fa" stroke="#1e3a8a" strokeWidth="3"/>
@@ -44,20 +44,23 @@ const DishIcon = ({ type, icons }) => (
         <path d="M 30 55 Q 50 80 70 55" fill="none" stroke="#1e3a8a" strokeWidth="2" strokeDasharray="4 4"/>
       </svg>
     )}
-    <div className="relative flex items-center justify-center gap-0 z-10 -mt-1">
-      <span className="text-xl filter drop-shadow-md -mr-1">{String(icons[0])}</span>
-      <span className="text-xl filter drop-shadow-md z-10 mt-1">{String(icons[1])}</span>
+    <div className="relative flex items-center justify-center gap-0 z-10 -mt-0.5">
+      <span className="text-lg filter drop-shadow-md -mr-0.5">{String(icons[0])}</span>
+      <span className="text-lg filter drop-shadow-md z-10 mt-0.5">{String(icons[1])}</span>
     </div>
   </div>
 );
 
-export default function GameLoop({ currentChapter = 0, score: initialScore = 0, cash: initialCash = 0, onRecipeSaved, isSandbox = false }) {
-  const chapter = isSandbox ? null : STORY_CHAPTERS[Math.min(currentChapter, STORY_CHAPTERS.length - 1)];
+export default function GameLoop({ currentChapter = 0, score: initialScore = 0, cash: initialCash = 0, setScore: parentSetScore, setCash: parentSetCash, delight: parentDelight, setDelight: parentSetDelight, onRecipeSaved, isSandbox = false, isRestaurantMode = false, dailySpecialId = null, contracts = [], onShiftEnd }) {
+  const chapter = isSandbox || isRestaurantMode ? null : STORY_CHAPTERS[Math.min(currentChapter, STORY_CHAPTERS.length - 1)];
   const wokPhysicsRef = useRef(null);
   const prevTossRef = useRef({ x: 0, y: 0 });
   const droppedItemsRef = useRef([]);
   const spillRef = useRef({ total: 0, timer: null });
   const [spillDisplay, setSpillDisplay] = useState(null);
+  const restaurantStatsRef = useRef({
+    dishesServed: 0, totalEarnedCash: 0, hadBurn: false, maxCombo: 1, perfectServes: 0, giftsCount: 0, specialServesCount: 0
+  });
 
   const [audioReady, setAudioReady] = useState(false);
   const [heatLevel, setHeatLevel] = useState(40);
@@ -73,12 +76,19 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
   const [wokHei, setWokHei] = useState(0);
   const [wokResidue, setWokResidue] = useState(0);
 
-  const [score, setScore] = useState(initialScore);
-  const [cash, setCash] = useState(initialCash);
+  const isControlled = parentSetScore != null && parentSetCash != null;
+  const [localScore, setLocalScore] = useState(initialScore);
+  const [localCash, setLocalCash] = useState(initialCash);
+  const score = isControlled ? initialScore : localScore;
+  const setScore = isControlled ? parentSetScore : setLocalScore;
+  const cash = isControlled ? initialCash : localCash;
+  const setCash = isControlled ? parentSetCash : setLocalCash;
   const [soul, setSoul] = useState(0);
   const [orders, setOrders] = useState([]);
   const [combo, setCombo] = useState(1);
-  const [reputation, setReputation] = useState(5);
+  const [localDelight, setLocalDelight] = useState(0);
+  const delight = parentDelight !== undefined ? parentDelight : localDelight;
+  const setDelight = parentSetDelight || setLocalDelight;
   const [notifications, setNotifications] = useState([]);
   const [streakPopup, setStreakPopup] = useState(null);
   const [gameOver, setGameOver] = useState(false);
@@ -87,6 +97,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
   const [chefsSpecialMode, setChefsSpecialMode] = useState(false);
   const [recipeMarkup, setRecipeMarkup] = useState(2.5);
   const [specialMarkup, setSpecialMarkup] = useState(2.5);
+  const [goodwill, setGoodwill] = useState(0);
 
   const gameDataRef = useRef({
     heatLevel: 40, wokContents: [], cookProgress: 0, burnProgress: 0,
@@ -96,6 +107,28 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
     spawnedIngredients: [],
   });
   const ordersRef = useRef([]);
+
+  const [viewport, setViewport] = useState(() => {
+    if (typeof window === 'undefined') return { isIpadPortrait: false };
+    const isIpad = /iPad/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+    const isPortrait = window.innerWidth < window.innerHeight;
+    return { isIpadPortrait: isIpad && isPortrait };
+  });
+
+  useEffect(() => {
+    const update = () => {
+      const isIpad = /iPad/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      const isPortrait = window.innerWidth < window.innerHeight;
+      setViewport({ isIpadPortrait: isIpad && isPortrait });
+    };
+    update();
+    window.addEventListener('resize', update);
+    window.addEventListener('orientationchange', update);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('orientationchange', update);
+    };
+  }, []);
 
   useEffect(() => {
     const prev = gameDataRef.current;
@@ -107,12 +140,52 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
   }, [heatLevel, wokContents, cookProgress, burnProgress, wokHei,
       wokResidue, isCleaning, oilLevel, isOiling, toss, waterLevel, waterDirtiness]);
 
+  // Keyboard: Q = heat up, A = heat down, C = oil (hold)
+  useEffect(() => {
+    const target = (e) => /input|textarea|select/i.test(e.target?.tagName || '');
+    const onKeyDown = (e) => {
+      if (target(e)) return;
+      const k = e.key?.toLowerCase();
+      if (k === 'q') {
+        e.preventDefault();
+        setHeatLevel(prev => Math.min(100, prev + 8));
+      } else if (k === 'a') {
+        e.preventDefault();
+        setHeatLevel(prev => Math.max(0, prev - 8));
+      } else if (k === 'c') {
+        e.preventDefault();
+        setIsOiling(true);
+      }
+    };
+    const onKeyUp = (e) => {
+      if (e.key?.toLowerCase() === 'c') setIsOiling(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, []);
+
   useEffect(() => { ordersRef.current = orders; }, [orders]);
 
   const showNotification = useCallback((msg, type = 'normal') => {
     const id = Date.now() + Math.random();
+    const durationMs = type === 'success' ? 5000 : 2000;
     setNotifications(prev => [...prev, { id, msg: String(msg), type }]);
-    setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), 2000);
+    setTimeout(() => setNotifications(prev => prev.filter(n => n.id !== id)), durationMs);
+  }, []);
+
+  const bringOrderToFront = useCallback((orderId) => {
+    setOrders(prev => {
+      const idx = prev.findIndex(o => o.id === orderId);
+      if (idx <= 0) return prev;
+      const next = prev.slice();
+      const [picked] = next.splice(idx, 1);
+      next.unshift(picked);
+      return next;
+    });
   }, []);
 
   const triggerStreakPopup = useCallback((text, color) => {
@@ -146,21 +219,28 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
 
   useEffect(() => {
     if (!audioReady || orders.length > 0) return;
-    if (isSandbox) return;
+    if (isSandbox || isRestaurantMode) {
+      const available = RECIPES;
+      if (available.length > 0) {
+        const r = available[Math.floor(Math.random() * available.length)];
+        setOrders([{ ...r, id: Date.now(), recipeId: r.id, timeLeft: 9999 }]);
+      }
+      return;
+    }
     const available = RECIPES.filter(r => r.chapter <= currentChapter);
     if (available.length > 0) {
       const r = available[0];
       setOrders([{ ...r, id: Date.now(), timeLeft: r.timeLimit }]);
     }
-  }, [audioReady, isSandbox]);
+  }, [audioReady, isSandbox, isRestaurantMode]);
 
   const forceNextOrder = useCallback(() => {
-    if (ordersRef.current.length >= (isSandbox ? 5 : 3)) return;
-    const available = isSandbox ? RECIPES : RECIPES.filter(r => r.chapter <= currentChapter);
+    if (ordersRef.current.length >= (isSandbox || isRestaurantMode ? 5 : 3)) return;
+    const available = (isSandbox || isRestaurantMode) ? RECIPES : RECIPES.filter(r => r.chapter <= currentChapter);
     const recipe = available[Math.floor(Math.random() * available.length)];
-    let newOrder = { ...recipe, id: Date.now(), timeLeft: isSandbox ? 9999 : recipe.timeLimit };
+    let newOrder = { ...recipe, id: Date.now(), recipeId: recipe.id, timeLeft: (isSandbox || isRestaurantMode) ? 9999 : recipe.timeLimit };
 
-    if (!isSandbox && currentChapter > 0 && Math.random() < 0.25) {
+    if (!isSandbox && !isRestaurantMode && currentChapter > 0 && Math.random() < 0.25) {
       const event = SPECIAL_EVENTS[Math.floor(Math.random() * SPECIAL_EVENTS.length)];
       if (!(event.id === 'spicy' && recipe.requires.includes('chili')) &&
           !(event.id === 'drunk' && recipe.requires.includes('wine'))) {
@@ -170,7 +250,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
     }
 
     setOrders(prev => [...prev, newOrder]);
-  }, [currentChapter, isSandbox]);
+  }, [currentChapter, isSandbox, isRestaurantMode]);
 
   const handleMergeOrders = useCallback((dishName) => {
     setOrders(prev => {
@@ -278,11 +358,14 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
       return;
     }
     if (burnProgress >= 100) {
-      if (isSandbox) {
-        showNotification("Burnt! Try again — no penalty in sandbox.", "error");
+      if (isRestaurantMode) restaurantStatsRef.current.hadBurn = true;
+      if (isSandbox || isRestaurantMode) {
+        showNotification("Burnt! Try again — no penalty.", "error");
       } else {
-        showNotification(isDonation ? "Charity rejected burnt food!" : "Burnt to a crisp! -1 Star", "error");
-        if (!isDonation) setReputation(r => Math.max(0, r - 1));
+        showNotification(isDonation ? "Charity rejected burnt food!" : "Burnt! Customer left unhappy. -2 delight", "error");
+        if (!isDonation) {
+          setDelight(d => { const next = Math.max(-10, d - 2); if (next <= -10) setGameOver(true); return next; });
+        }
       }
       setCombo(1);
       emptyWok();
@@ -314,8 +397,8 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
           if (isSandbox) {
             showNotification("Wok Hei too low — keep experimenting!", "error");
           } else {
-            showNotification("Failed! VIP demanded 90% Wok Hei!", "error");
-            setReputation(r => Math.max(0, r - 1));
+            showNotification("Failed! VIP demanded 90% Wok Hei! Customer left unhappy. -2 delight", "error");
+            setDelight(d => { const next = Math.max(-10, d - 2); if (next <= -10) setGameOver(true); return next; });
           }
           setCombo(1);
           setOrders(prev => prev.filter((_, idx) => idx !== i));
@@ -353,7 +436,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
       let oilTip = 0;
       if (oilDiff <= 12) {
         oilMult = 1.25;
-        oilTip = 3.0;
+        oilTip = 1.5;
         quality = "Perfect Oil! " + quality;
       } else if (effectiveOil > idealOil + 35) {
         oilMult = 0.5;
@@ -384,17 +467,34 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
       if (batchSize > 1) quality = `BULK x${batchSize}! ` + quality;
 
       const urgency = order.timeLeft / order.timeLimit;
-      let speedTip = urgency * 5.0 * batchMultiplier * batchSize;
+      const comboMult = 1 + Math.log2(Math.max(1, combo)) * 0.15;
+      let speedTip = urgency * 2.0 * batchMultiplier * batchSize;
 
       let baseRevenue = order.baseScore;
-      let finalRevenue = baseRevenue * wokHeiMult * flavorMult * umamiMult * combo * batchMultiplier * oilMult;
-      if (order.bonusCash) finalRevenue += order.bonusCash;
-      finalRevenue += speedTip;
-      finalRevenue += oilTip * batchSize;
+      const sellingPrice = baseRevenue * wokHeiMult * flavorMult * umamiMult * comboMult * batchMultiplier * oilMult;
+      const totalTips = (order.bonusCash || 0) + speedTip + oilTip * batchSize;
+      const tipCapFraction = (isSandbox || isRestaurantMode) ? 0.30 : 0.12;
+      const cappedTips = Math.min(totalTips, sellingPrice * tipCapFraction);
+      const surplusGoodwill = Math.max(0, totalTips - cappedTips);
+      let finalRevenue = sellingPrice + cappedTips;
+      const dailySpecialMult = (isRestaurantMode && dailySpecialId && (order.recipeId || order.id) === dailySpecialId) ? 1.25 : 1.0;
+      if (dailySpecialMult > 1) finalRevenue *= dailySpecialMult;
 
       let profit = Number((finalRevenue - totalCost).toFixed(2));
       let newCombo = combo + batchSize;
       if (order.bonusCombo) newCombo += (order.bonusCombo * batchSize);
+
+      if (isRestaurantMode) {
+        const r = restaurantStatsRef.current;
+        if (isDonation) {
+          r.giftsCount += 1;
+        } else {
+          r.dishesServed += batchSize;
+          r.totalEarnedCash += profit;
+          if (isPerfect) r.perfectServes += 1;
+          r.maxCombo = Math.max(r.maxCombo, newCombo);
+        }
+      }
 
       if (isDonation) {
         const gainedSoul = Math.floor(finalRevenue / 10) + batchSize;
@@ -403,20 +503,24 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
         triggerStreakPopup(`+${gainedSoul} SOUL!`, "#22d3ee");
         showNotification(`${quality} Donated! +${gainedSoul} Soul -$${totalCost.toFixed(2)}`, 'success');
       } else {
-        setCash(c => c + profit);
-        setScore(s => s + finalRevenue);
-
-        if (newCombo >= 3 && combo < 3) triggerStreakPopup("HEATING UP!", "#f97316");
-        else if (newCombo >= 5 && combo < 5) triggerStreakPopup("WOK & ROLL!", "#eab308");
-        else if (newCombo >= 10 && combo < 10) triggerStreakPopup("SHAOLIN SPEED!", "#a855f7");
-        else if (newCombo >= 15 && combo < 15) triggerStreakPopup("SORROWFUL TEARS!", "#3b82f6");
-        else if (newCombo >= 20 && newCombo % 5 === 0) triggerStreakPopup("SIK SAN!", "#ec4899");
-        showNotification(`${quality} +$${profit.toFixed(2)}${oilTip > 0 ? ` (+$${(oilTip * batchSize).toFixed(0)} oil tip)` : ''}`, profit >= 0 ? 'success' : 'error');
-        if (effectiveOil > idealOil + 35) {
-          setReputation(r => Math.max(0, r - 1));
-        }
+      setCash(c => c + profit);
+      setScore(s => s + finalRevenue);
+      if (surplusGoodwill > 0) {
+        setGoodwill(g => g + surplusGoodwill);
       }
       setCombo(newCombo);
+      if (!isSandbox && !isRestaurantMode) setDelight(d => Math.min(10, d + 2));
+      if (effectiveOil > idealOil + 35) {
+        setDelight(d => { const next = Math.max(-10, d - 2); if (next <= -10) setGameOver(true); return next; });
+      }
+
+      if (newCombo >= 3 && combo < 3) triggerStreakPopup("HEATING UP!", "#f97316");
+      else if (newCombo >= 5 && combo < 5) triggerStreakPopup("WOK & ROLL!", "#eab308");
+      else if (newCombo >= 10 && combo < 10) triggerStreakPopup("SHAOLIN SPEED!", "#a855f7");
+      else if (newCombo >= 15 && combo < 15) triggerStreakPopup("SORROWFUL TEARS!", "#3b82f6");
+      else if (newCombo >= 20 && newCombo % 5 === 0) triggerStreakPopup("SIK SAN!", "#ec4899");
+      showNotification(`${quality} +$${profit.toFixed(2)}${dailySpecialMult > 1 ? ' 🌟 Daily Special!' : ''}${oilTip > 0 ? ` (+$${(oilTip * batchSize).toFixed(0)} oil tip)` : ''}${surplusGoodwill > 0 ? ` · +$${surplusGoodwill.toFixed(2)} goodwill` : ''}${!isSandbox && !isRestaurantMode ? ' +2 delight' : ''}`, profit >= 0 ? 'success' : 'error');
+      }
       playDing(isPerfect);
       setOrders(prev => prev.filter((_, idx) => idx !== matchedOrderIndex));
       wokPhysicsRef.current?.triggerServeToss?.();
@@ -425,6 +529,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
       setCookProgress(0);
       setBurnProgress(0);
       setWokHei(0);
+      setOilLevel(0);
       droppedItemsRef.current = [];
 
     } else {
@@ -443,6 +548,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
         setCookProgress(0);
         setBurnProgress(0);
         setWokHei(0);
+        setOilLevel(0);
         droppedItemsRef.current = [];
       } else {
         const activeOrders = orders.filter(o => !o.failed);
@@ -453,7 +559,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
         }
 
         if (matchedOrderIndex >= 0) {
-          showNotification(isSandbox ? `Undercooked (${Math.floor(cookProgress)}%) — cook longer!` : `Undercooked! (${Math.floor(cookProgress)}% < 75%) -1 Star`, "error");
+          showNotification(isSandbox ? `Undercooked (${Math.floor(cookProgress)}%) — cook longer!` : `Undercooked! (${Math.floor(cookProgress)}% < 75%) Customer left unhappy. -1 😊`, "error");
         } else {
           const missing = [];
           const firstOrder = activeOrders[0];
@@ -463,10 +569,10 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
               if (info && !missing.includes(info.icon)) missing.push(info.icon);
             }
           });
-          showNotification(isSandbox ? `Missing: ${missing.join(' ')} — keep experimenting!` : `Missing: ${missing.join(' ')} -1 Star`, "error");
+          showNotification(isSandbox ? `Missing: ${missing.join(' ')} — keep experimenting!` : `Missing: ${missing.join(' ')} Customer left unhappy. -2 delight`, "error");
         }
 
-        if (!isSandbox) setReputation(r => Math.max(0, r - 1));
+        if (!isSandbox) setDelight(d => { const next = Math.max(-10, d - 2); if (next <= -10) setGameOver(true); return next; });
         setCombo(1);
         wokPhysicsRef.current?.triggerTrashToss?.();
         setWokContents([]);
@@ -546,10 +652,6 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
   }, [audioReady, isCleaning]);
 
   useEffect(() => {
-    if (!isSandbox && reputation <= 0 && !gameOver) setGameOver(true);
-  }, [reputation, gameOver, isSandbox]);
-
-  useEffect(() => {
     if (!audioReady) return;
     const tickRate = 100;
     const difficulty = gameDataRef.current.difficulty || 'NORMAL';
@@ -559,7 +661,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
       const state = gameDataRef.current;
 
       setOrders(prevOrders => {
-        if (isSandbox) return prevOrders;
+        if (isSandbox || isRestaurantMode) return prevOrders;
         let repLost = 0;
         const newOrders = prevOrders.map(order => {
           const timeDecay = tickRate / 1000;
@@ -567,18 +669,23 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
 
           if (timeLeft <= 0 && !order.failed) {
             repLost++;
-            showNotification('Order Failed! -1 Star', 'error');
+            showNotification('Order failed! Customer left unhappy. -1 😊', 'error');
             setCombo(1);
             return { ...order, timeLeft: 0, failed: true };
           }
           return { ...order, timeLeft };
         }).filter(o => o.timeLeft > -2);
 
-        if (repLost > 0) setReputation(r => Math.max(0, r - repLost));
+        if (repLost > 0) setDelight(d => {
+          const perFail = gameDataRef.current?.npcBuffs?.gooseProtection ? 1 : 2;
+          const next = Math.max(-10, d - repLost * perFail);
+          if (next <= -10) setGameOver(true);
+          return next;
+        });
         return newOrders;
       });
 
-      if (!isSandbox && Math.random() < 0.02 && ordersRef.current.length < 3) {
+      if (!isSandbox && !isRestaurantMode && Math.random() < 0.02 && ordersRef.current.length < 3) {
         const available = RECIPES.filter(r => r.chapter <= currentChapter);
         let base = available[Math.floor(Math.random() * available.length)];
         let newOrder = { ...base, id: Date.now(), timeLeft: base.timeLimit };
@@ -607,7 +714,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
         });
 
         if (wastageCost > 0) {
-          if (!isSandbox) setCash(c => c - wastageCost);
+          if (!isSandbox && !isRestaurantMode) setCash(c => c - wastageCost);
           const sp = spillRef.current;
           sp.total += wastageCost;
           setSpillDisplay(sp.total);
@@ -755,7 +862,8 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
     return Math.max(5, Math.min(95, chance));
   };
 
-  const proposeSpecial = (orderIndex) => {
+  const proposeSpecial = (orderId) => {
+    const orderIndex = orders.findIndex(o => o.id === orderId);
     const order = orders[orderIndex];
     if (!order || order.failed) return;
     setChefsSpecialMode(false);
@@ -826,7 +934,8 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
       if (umami.avg >= 3) quality = "Deep Umami " + quality;
 
       const specialMult = 1.3;
-      let finalRevenue = specialBaseRevenue * wokHeiMult * flavorMult * umamiMult * specialMult * combo * oilMult;
+      const comboMult = 1 + Math.log2(Math.max(1, combo)) * 0.15;
+      let finalRevenue = specialBaseRevenue * wokHeiMult * flavorMult * umamiMult * specialMult * comboMult * oilMult;
       let profit = Number((finalRevenue - totalCost).toFixed(2));
       let newCombo = combo + 1;
 
@@ -841,18 +950,20 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
       showNotification(`${quality} +$${profit.toFixed(2)}`, 'success');
       playDing(isPerfect);
 
-      setOrders(prev => prev.filter((_, idx) => idx !== orderIndex));
+      setOrders(prev => prev.filter(o => o.id !== orderId));
+      if (isRestaurantMode) restaurantStatsRef.current.specialServesCount += 1;
       wokPhysicsRef.current?.triggerServeToss?.();
       setWokContents([]);
       setWokResidue(prev => Math.min(100, prev + 15));
       setCookProgress(0);
       setBurnProgress(0);
       setWokHei(0);
+      setOilLevel(0);
       droppedItemsRef.current = [];
     } else {
       const moodPenalty = 3 + Math.random() * 5;
-      setOrders(prev => prev.map((o, idx) =>
-        idx === orderIndex ? { ...o, timeLeft: o.timeLeft - moodPenalty } : o
+      setOrders(prev => prev.map(o =>
+        o.id === orderId ? { ...o, timeLeft: o.timeLeft - moodPenalty } : o
       ));
 
       const responses = [
@@ -873,7 +984,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
 
   const getDynamicPrompt = () => {
     if (chefsSpecialMode) return { text: "🍳 TAP A TICKET to suggest your Chef's Special!", color: "text-yellow-400 animate-pulse font-bold" };
-    if (gameOver) return { text: "GAME OVER - All reputation lost!", color: "text-red-500 font-black animate-pulse" };
+    if (gameOver) return { text: "GAME OVER — delight hit -10!", color: "text-red-500 font-black animate-pulse" };
     if (isSandbox) {
       if (wokContents.length === 0) {
         if (orders.length === 0) return { text: "Add a ticket with [+] or just throw ingredients in!", color: "text-cyan-400" };
@@ -962,20 +1073,22 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
       {!audioReady && (
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/80 px-6">
           <div className="w-full max-w-sm rounded-2xl border border-neutral-700 bg-neutral-900 p-6 text-center shadow-2xl">
-            <h2 className={`mb-2 text-2xl font-black tracking-tight ${isSandbox ? 'text-cyan-400' : 'text-orange-400'}`}>
-              {isSandbox ? 'Sandbox Kitchen' : 'Start Shift'}
+            <h2 className={`mb-2 text-2xl font-black tracking-tight ${isRestaurantMode ? 'text-amber-400' : isSandbox ? 'text-cyan-400' : 'text-orange-400'}`}>
+              {isRestaurantMode ? 'Restaurant Shift' : isSandbox ? 'Sandbox Kitchen' : 'Start Shift'}
             </h2>
             <p className="mb-4 text-xs text-neutral-300">
-              {isSandbox
+              {isRestaurantMode
+                ? 'Run your restaurant. Complete contracts, serve the daily special, then End shift when done.'
+                : isSandbox
                 ? 'Free play — no timers, no penalties. Experiment with any recipe and cooking technique!'
                 : 'Tap below to wake the kitchen audio. Browsers need a click before sound can play.'}
             </p>
             <button
               type="button"
               onClick={handleStartShift}
-              className={`mt-2 w-full rounded-xl py-3 text-xs font-black uppercase tracking-widest text-white shadow-lg transition-transform active:translate-y-0.5 active:scale-95 ${isSandbox ? 'bg-gradient-to-r from-cyan-500 to-teal-600' : 'bg-gradient-to-r from-orange-500 to-red-600'}`}
+              className={`mt-2 w-full rounded-xl py-3 text-xs font-black uppercase tracking-widest text-white shadow-lg transition-transform active:translate-y-0.5 active:scale-95 ${isRestaurantMode ? 'bg-gradient-to-r from-amber-500 to-orange-600' : isSandbox ? 'bg-gradient-to-r from-cyan-500 to-teal-600' : 'bg-gradient-to-r from-orange-500 to-red-600'}`}
             >
-              {isSandbox ? 'Enter Kitchen' : 'Begin Service'}
+              {isRestaurantMode ? 'Start Kitchen' : isSandbox ? 'Enter Kitchen' : 'Begin Service'}
             </button>
           </div>
         </div>
@@ -986,45 +1099,24 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
         <div className="absolute inset-0 z-40 flex items-center justify-center bg-black/90 px-6">
           <div className="w-full max-w-sm rounded-2xl border border-red-700 bg-neutral-900 p-6 text-center shadow-2xl">
             <h2 className="mb-2 text-2xl font-black tracking-tight text-red-500">SHIFT OVER</h2>
-            <p className="mb-2 text-sm text-neutral-300">You've lost all your reputation stars!</p>
-            <div className="text-xl font-bold text-green-400 mb-1">Score: ${score.toFixed(2)}</div>
-            <div className="text-sm text-yellow-400 mb-4">Cash: ${cash.toFixed(2)}</div>
-            <div className="text-lg font-black mb-4" style={{ color: getScoreTitle(score).color?.replace('text-', '') }}>
+            <p className="mb-2 text-sm text-neutral-300">Customer delight hit -10 — the crowd has turned!</p>
+            <div className="text-xl font-bold text-green-400 mb-1" title="Score">Score: {Math.round(score)}</div>
+            <div className="text-sm text-yellow-400 mb-1" title="Cash">Cash: ${cash.toFixed(2)}</div>
+            {goodwill > 0 && <div className="text-sm text-amber-400 mb-4" title="Surplus tips stored as goodwill from perfect oil matches.">Goodwill: ${goodwill.toFixed(2)}</div>}
+            {!goodwill && <div className="mb-4" />}
+            <div className="text-lg font-black mb-4" style={{ color: getScoreTitle(score).color?.replace('text-', '') }} title="Chef rank based on total earnings this run.">
               {getScoreTitle(score).title}
             </div>
           </div>
         </div>
       )}
 
-      {/* Header with score/cash/reputation */}
-      <header className="shrink-0 bg-neutral-900 border-b border-neutral-800 flex justify-between items-center z-20 shadow-xl relative p-2">
-        <div className="flex items-center gap-2">
-          <h1 className={`text-xs font-bold truncate ${isSandbox ? 'text-cyan-400' : (chapter?.color ?? 'text-orange-400')}`}>
-            {isSandbox ? '🧪 Sandbox Kitchen' : (chapter?.title ?? 'Chapter 1')}
-          </h1>
-          <div className="bg-neutral-800 px-3 py-0.5 rounded-full text-green-400 font-mono text-sm border border-neutral-700 flex items-center gap-1">
-            <span key={cash} className={`inline-block animate-pop ${cash < 0 ? 'text-red-500' : 'text-green-400'}`}>${Number(cash).toFixed(2)}</span>
-            {soul > 0 && <span key={`soul-${soul}`} className="text-cyan-400 inline-block font-bold animate-pop flex items-center gap-1 ml-2"><Heart size={14} fill="currentColor" /> {soul}</span>}
-            {combo > 1 && <span key={combo} className="text-xs text-orange-400 inline-block font-black animate-pop ml-2">x{combo}</span>}
-          </div>
-        </div>
-        <div className="flex gap-0.5 ml-1 border-l border-neutral-700 pl-2">
-          {isSandbox ? (
-            <span className="text-cyan-400 text-xs font-bold px-1">∞ FREE PLAY</span>
-          ) : [...Array(5)].map((_, i) => (
-            <svg key={i} className={`w-4 h-4 ${i < reputation ? 'text-yellow-400 drop-shadow-[0_0_5px_rgba(250,204,21,0.5)]' : 'text-neutral-800'}`} fill="currentColor" viewBox="0 0 20 20">
-              <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
-            </svg>
-          ))}
-        </div>
-      </header>
-
-      {/* Ticket Rail */}
+      {/* Ticket Rail (header row removed; End shift + stars moved to end of order row) */}
       <div className="flex flex-col w-full z-10 relative">
         {chefsSpecialMode ? (
-          <div className="w-full bg-yellow-950/90 border-b border-yellow-700 py-1.5 px-3 flex items-center gap-2 shadow-[0_0_15px_rgba(234,179,8,0.2)]">
+          <div className="w-full bg-yellow-950/90 border-b border-yellow-700 py-1.5 px-3 flex items-center gap-2 shadow-[0_0_15px_rgba(234,179,8,0.2)]" title="Chef's Special: set your markup (1.5x–4x of dish cost). Tap a ticket to serve at this price. Higher = more profit but risk of rejection if too high.">
             <ChefHat size={14} className="text-yellow-400 shrink-0" />
-            <span className="text-[9px] font-black text-yellow-500 uppercase tracking-wider shrink-0">Price</span>
+            <span className="text-[9px] font-black text-yellow-500 uppercase tracking-wider shrink-0" title="Markup multiplier on your dish cost. 2.5x = 2.5× ingredient cost as selling price.">Price</span>
             <input
               type="range" min="1.5" max="4.0" step="0.1"
               value={specialMarkup}
@@ -1041,29 +1133,30 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
           </div>
         ) : duplicateNames.length > 0 ? (
           <div className="w-full bg-blue-900 border-b border-blue-700 py-1 px-4 flex justify-center items-center gap-2 text-[10px] tracking-widest uppercase text-white shadow-[0_0_15px_rgba(59,130,246,0.5)]">
-            <span className="animate-pulse text-blue-200">Duplicates Detected!</span>
-            <button onClick={() => handleMergeOrders(duplicateNames[0])} className="bg-yellow-500 hover:bg-yellow-400 text-black font-black px-2 py-0.5 rounded shadow-lg active:scale-95 transition-transform flex items-center gap-1 border-b-2 border-yellow-700 active:border-b-0 active:translate-y-px">
+            <span className="animate-pulse text-blue-200">Multiple similar orders detected!</span>
+            <button onClick={() => handleMergeOrders(duplicateNames[0])} className="bg-yellow-500 hover:bg-yellow-400 text-black font-black px-2 py-0.5 rounded shadow-lg active:scale-95 transition-transform flex items-center gap-1 border-b-2 border-yellow-700 active:border-b-0 active:translate-y-px" title="Merge duplicate orders into one bulk order.">
               MERGE BULK {String(duplicateNames[0]).toUpperCase()}
             </button>
           </div>
         ) : (
-          <div className={`w-full bg-neutral-950/80 border-b border-[#111] py-1 px-4 flex justify-center items-center text-xs tracking-widest uppercase transition-colors duration-300 ${dynPrompt.color}`}>
+          <div className={`w-full bg-neutral-950/80 border-b border-[#111] py-1 px-4 flex justify-center items-center text-xs tracking-widest uppercase transition-colors duration-300 ${dynPrompt.color}`} title="Current tip or status.">
             {String(dynPrompt.text)}
           </div>
         )}
 
-        <div className="shrink-0 bg-[#1a1a1c] border-b-4 border-[#111] flex overflow-x-auto shadow-inner h-24 p-2 gap-3">
+        <div className="shrink-0 bg-[#1a1a1c] border-b-4 border-[#111] flex overflow-x-auto shadow-inner h-20 p-2 gap-3 items-center">
           <button
             onClick={forceNextOrder}
-            disabled={orders.length >= (isSandbox ? 5 : 3) || gameOver}
-            className={`h-full flex flex-col items-center justify-center border-2 border-dashed rounded-lg hover:text-white transition-all shrink-0 min-w-[70px] ${isSandbox ? 'border-cyan-800 text-cyan-600' : 'border-neutral-700 text-neutral-500'}`}
+            disabled={orders.length >= (isSandbox || isRestaurantMode ? 5 : 3) || gameOver}
+            className={`h-full flex flex-col items-center justify-center border-2 border-dashed rounded-lg hover:text-white transition-all shrink-0 min-w-[72px] ${(isSandbox || isRestaurantMode) ? 'border-cyan-800 text-cyan-600' : 'border-neutral-700 text-neutral-500'}`}
+            title={orders.length >= (isSandbox || isRestaurantMode ? 5 : 3) ? "Maximum orders reached" : (isSandbox || isRestaurantMode) ? "Add a recipe" : "Next order will appear here"}
           >
-            <Plus className="w-6 h-6" />
+            <Plus className="w-5 h-5" />
             <span className="text-[8px] uppercase font-bold text-center leading-tight">{isSandbox ? 'Recipe' : 'Next'}</span>
           </button>
 
           {orders.map((order, orderIdx) => {
-            const urgency = isSandbox ? 1 : order.timeLeft / order.timeLimit;
+            const urgency = (isSandbox || isRestaurantMode) ? 1 : order.timeLeft / order.timeLimit;
             const isSpecial = !!order.specialEvent;
             const isMerged = !!order.isMerged;
             const ticketColor = order.failed ? 'bg-red-950 border-red-800 text-red-400' :
@@ -1072,21 +1165,36 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
                                 isSpecial ? order.specialEvent.color :
                                 urgency < 0.5 ? 'bg-yellow-50 border-yellow-400 text-yellow-900' : 'bg-white border-neutral-300 text-neutral-900';
             return (
-              <div key={order.id} className={`rounded-lg shadow-lg border-2 ${ticketColor} relative flex flex-row items-center shrink-0 min-w-[180px] p-2 gap-2 ${chefsSpecialMode && !order.failed ? 'ring-2 ring-yellow-400 ring-offset-1 ring-offset-black' : ''}`}>
+              <div
+                key={order.id}
+                role="button"
+                tabIndex={0}
+                onClick={() => bringOrderToFront(order.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') bringOrderToFront(order.id);
+                }}
+                className={`rounded-lg shadow-lg border-2 ${ticketColor} relative flex flex-row items-center shrink-0 min-w-[160px] p-1.5 gap-2 cursor-pointer ${chefsSpecialMode && !order.failed ? 'ring-2 ring-yellow-400 ring-offset-1 ring-offset-black' : ''}`}
+                title={`Order: ${order.name}. Tap to bring this ticket to the front (timer stays the same).`}
+              >
                 {isSpecial && !order.failed && !isMerged && (
-                  <div className="absolute -top-3 -right-3 bg-black text-white text-[7px] font-black px-1.5 py-0.5 rounded-full border border-current z-20 flex items-center gap-1 shadow-lg transform rotate-6 whitespace-nowrap">
+                  <div className="absolute -top-3 -right-3 bg-black text-white text-[8px] font-black px-1.5 py-0.5 rounded-full border border-current z-20 flex items-center gap-1 shadow-lg transform rotate-6 whitespace-nowrap">
                     <span>{String(order.specialEvent.icon)}</span> {String(order.specialEvent.name)}
                   </div>
                 )}
                 {isMerged && !order.failed && (
-                  <div className="absolute -top-3 -right-3 bg-yellow-500 text-black text-[7px] font-black px-2 py-0.5 rounded-full border border-black z-20 flex items-center gap-1 shadow-lg transform rotate-6 whitespace-nowrap">
+                  <div className="absolute -top-3 -right-3 bg-yellow-500 text-black text-[8px] font-black px-2 py-0.5 rounded-full border border-black z-20 flex items-center gap-1 shadow-lg transform rotate-6 whitespace-nowrap">
                     BULK x{order.batchSize}
+                  </div>
+                )}
+                {isRestaurantMode && dailySpecialId && (order.recipeId || order.id) === dailySpecialId && !order.failed && !isMerged && (
+                  <div className="absolute -top-3 -left-3 bg-amber-500 text-black text-[8px] font-black px-1.5 py-0.5 rounded-full border border-amber-700 z-20 flex items-center gap-1 shadow-lg transform -rotate-6 whitespace-nowrap">
+                    🌟 Daily Special
                   </div>
                 )}
                 <DishIcon type={order.dishType} icons={order.displayIcons} />
                 <div className="flex flex-col justify-center min-w-0 flex-1 text-left">
-                  <div className="flex items-center gap-1 mb-1">
-                    <div className="font-bold leading-tight truncate text-[11px]">{String(order.name)}</div>
+                  <div className="flex items-center gap-1 mb-0.5">
+                    <div className="font-bold leading-tight truncate text-xs">{String(order.name)}</div>
                     {order.idealOil != null && !order.failed && (() => {
                       const oilClose = Math.abs(oilLevel - order.idealOil) <= 12;
                       const oilFar = Math.abs(oilLevel - order.idealOil) > 25;
@@ -1097,19 +1205,15 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
                       );
                     })()}
                   </div>
-                  <div className="flex flex-wrap bg-black/10 rounded-md w-full gap-1 mt-0.5 px-1.5 py-1">
-                    {order.requires.map((req, i) => {
-                      const info = ALL_ITEMS_BY_ID[req];
-                      return (
-                        <span key={req + i} className="text-xs drop-shadow-md leading-none" title={info?.name || req}>{String(info?.icon || '?')}</span>
-                      );
-                    })}
-                  </div>
                 </div>
                 {chefsSpecialMode && !order.failed && (
                   <div
                     className="absolute inset-0 rounded-lg bg-yellow-500/15 flex items-center justify-center z-30 cursor-pointer hover:bg-yellow-500/30 transition-colors"
-                    onClick={() => proposeSpecial(orderIdx)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      bringOrderToFront(order.id);
+                      proposeSpecial(order.id);
+                    }}
                   >
                     <div className="bg-black/90 px-2.5 py-1 rounded-full text-[10px] font-black text-yellow-300 flex items-center gap-1.5 shadow-lg border border-yellow-600/50">
                       <ChefHat size={12} /> {Math.round(calculateAcceptChance(order))}% CHANCE
@@ -1117,24 +1221,80 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
                   </div>
                 )}
                 {!isSandbox && (
-                  <div className="absolute bottom-0 left-0 right-0 h-1 bg-black/20 overflow-hidden rounded-b-lg">
+                  <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-black/20 overflow-hidden rounded-b-lg">
                     <div className={`h-full ${urgency < 0.25 ? 'bg-red-500' : isMerged ? 'bg-blue-400' : 'bg-green-500'}`} style={{ width: `${Math.max(0, urgency * 100)}%` }} />
                   </div>
                 )}
               </div>
             );
           })}
+          {/* End shift (restaurant) or ∞ FREE PLAY (sandbox) or Customer Delight (story) */}
+          {(isRestaurantMode || isSandbox) && (
+          <div className="flex items-center gap-1.5 shrink-0 border-l border-neutral-700 pl-3 ml-1" title={isRestaurantMode ? 'End your shift to bank progress' : 'Sandbox: no delight penalty, unlimited play.'}>
+            {isRestaurantMode && onShiftEnd ? (
+              <button
+                onClick={() => {
+                  const r = restaurantStatsRef.current;
+                  onShiftEnd({
+                    score,
+                    cash,
+                    dishesServed: r.dishesServed,
+                    totalEarnedCash: r.totalEarnedCash,
+                    hadBurn: r.hadBurn,
+                    maxCombo: r.maxCombo,
+                    perfectServes: r.perfectServes,
+                    giftsCount: r.giftsCount,
+                    specialServesCount: r.specialServesCount,
+                  });
+                }}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-600 hover:bg-amber-500 text-neutral-900 font-bold text-[10px] uppercase tracking-wider transition-transform active:scale-95"
+              >
+                <Flag size={12} /> End shift
+              </button>
+            ) : (
+              <span className="text-cyan-400 text-[10px] font-bold px-1" title="Sandbox: no delight penalty, unlimited play.">∞ FREE PLAY</span>
+            )}
+          </div>
+          )}
+          {!isSandbox && !isRestaurantMode && (
+            <div className="flex items-center gap-1 shrink-0 border-l border-neutral-700 pl-3 ml-1" title="Customer Delight: -10 (angry) to +10 (delighted). 0 = center. Game over at -10.">
+              <span className="text-[9px] font-bold text-amber-400 uppercase tracking-wider">Delight</span>
+              <div className="flex items-center gap-0.5">
+                <span className="text-sm opacity-80" title="-10 (angry)">😠</span>
+                <div className="w-14 md:w-16 h-2 md:h-2.5 bg-neutral-800 rounded-full overflow-hidden border border-neutral-700 relative shrink-0">
+                  {(() => {
+                    const d = Number(delight);
+                    if (Number.isNaN(d)) return null;
+                    const displayValue = Math.max(-10, Math.min(10, d));
+                    const redWidth = displayValue < 0 ? ((-displayValue) / 10) * 50 : 0;
+                    const greenWidth = displayValue > 0 ? (displayValue / 10) * 50 : 0;
+                    return (
+                      <>
+                        {redWidth > 0 && <div className="absolute top-0 bottom-0 right-1/2 bg-red-500 rounded-l-full transition-all duration-200" style={{ width: `${redWidth}%` }} />}
+                        {greenWidth > 0 && <div className="absolute top-0 bottom-0 left-1/2 bg-green-500 rounded-r-full transition-all duration-200" style={{ width: `${greenWidth}%` }} />}
+                      </>
+                    );
+                  })()}
+                </div>
+                <span className="text-sm opacity-80" title="+10 (delighted)">😊</span>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="shrink-0 bg-[#1a1a1c] border-b border-[#111] py-1 px-3 flex justify-center items-center text-[10px] text-neutral-500 tracking-wide" title="Tap any order ticket to move it to the front of the queue; its countdown stays the same so you can prioritise.">
+          Tap an order to bring it to the front — timer unchanged.
         </div>
       </div>
 
-      {/* Main gameplay: Left controls | Canvas | Right controls */}
-      <div className="flex flex-1 min-h-0 min-w-0 justify-between items-center relative px-1 py-1">
+      {/* Main gameplay: Left controls | Ingredients | Canvas | Right controls */}
+      <div className={`flex flex-1 min-h-0 min-w-0 relative px-1 py-1 gap-1 ${viewport.isIpadPortrait ? 'flex-col' : 'justify-between items-stretch'}`}>
 
+        <div className="flex flex-1 min-h-0 min-w-0 justify-between items-stretch gap-1">
         {/* Left Column: Heat + Oil */}
         <div className="flex flex-row justify-center gap-1.5 h-full z-20 shrink-0 w-28 max-h-[90%]">
 
           {/* Heat Slider */}
-          <div className="w-1/2 bg-neutral-900 rounded-full flex flex-col items-center border border-neutral-800 relative flex-1 min-h-0 py-4">
+          <div className="w-1/2 bg-neutral-900 rounded-full flex flex-col items-center border border-neutral-800 relative flex-1 min-h-0 py-4" title="Drag to set burner heat. High heat cooks faster but fills the Burn meter quicker.">
             <div className={`font-black text-[8px] mb-2 z-10 pointer-events-none transition-colors ${heatLevel > 80 ? 'text-red-500 animate-pulse' : 'text-neutral-500'}`}>HEAT</div>
             <div
               className="relative flex-1 w-full flex justify-center cursor-ns-resize touch-none"
@@ -1161,7 +1321,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
           </div>
 
           {/* Oil Squeeze Bottle */}
-          <div className="w-1/2 bg-neutral-900/60 rounded-full flex flex-col items-center border border-yellow-900/50 relative flex-1 min-h-0 py-4 shadow-[inset_0_0_20px_rgba(234,179,8,0.05)]">
+          <div className="w-1/2 bg-neutral-900/60 rounded-full flex flex-col items-center border border-yellow-900/50 relative flex-1 min-h-0 py-4 shadow-[inset_0_0_20px_rgba(234,179,8,0.05)]" title="Oil level. Hold the bottle button below to add oil.">
             <div className={`font-black text-[8px] mb-2 z-10 pointer-events-none transition-colors ${oilLevel < 20 ? 'text-red-500 animate-pulse' : oilLevel > 75 ? 'text-orange-400' : 'text-yellow-500'}`}>OIL</div>
             <div className="relative flex-1 w-full flex justify-center">
               <div className="w-2 h-full bg-black rounded-full overflow-hidden relative shadow-inner">
@@ -1170,26 +1330,103 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
                   style={{ height: `${oilLevel}%` }}
                 />
               </div>
+              {orders?.[0]?.idealOil != null && !orders?.[0]?.failed && (
+                <div
+                  className="absolute left-1/2 -translate-x-1/2 flex items-center pointer-events-none"
+                  style={{ bottom: `calc(${Math.max(0, Math.min(100, orders[0].idealOil))}% - 1px)` }}
+                  title={`Optimal oil for "${String(orders[0].name)}": ${Math.round(orders[0].idealOil)}%`}
+                >
+                  <div className="w-2 h-[2px] bg-cyan-200 shadow-[0_0_8px_rgba(34,211,238,0.6)] rounded-full" />
+                  <div className="ml-1 text-[7px] font-black text-cyan-200 whitespace-nowrap drop-shadow-sm">
+                    OPT {Math.round(orders[0].idealOil)}%{oilLevel < orders[0].idealOil ? ` (+${Math.round(orders[0].idealOil - oilLevel)}%)` : ''}
+                  </div>
+                </div>
+              )}
             </div>
             <button
               onPointerDown={() => setIsOiling(true)}
               onPointerUp={() => setIsOiling(false)}
               onPointerLeave={() => setIsOiling(false)}
               className={`absolute bottom-2 w-10 h-10 rounded-full flex items-center justify-center transition-all shadow-xl border-b-4 active:border-b-0 active:translate-y-1 ${oilLevel < 20 ? 'bg-red-900 border-red-950 animate-pulse' : oilLevel > 75 ? 'bg-orange-800 border-orange-950' : 'bg-yellow-600 border-yellow-800 hover:bg-yellow-500'}`}
+              title="Hold to add oil to the wok."
             >
               <Droplets className={`w-4 h-4 ${oilLevel < 20 ? 'text-red-400' : 'text-yellow-100'}`} />
             </button>
           </div>
         </div>
 
-        {/* Center: Canvas with overlays */}
-        <div className="flex-1 h-full min-h-0 min-w-0 flex flex-col items-center justify-center relative mx-1 overflow-hidden">
+        {!viewport.isIpadPortrait && (
+        /* Ingredients left: 3 cols — Proteins | Carbs | Vegetables */
+        <div className="flex flex-col shrink-0 w-[19.6rem] h-full min-h-0 bg-[#151517] border border-[#0a0a0c] rounded-xl overflow-hidden shadow-[inset_0_0_20px_rgba(0,0,0,0.5)] z-20">
+          <div className="text-[10px] font-black text-neutral-400 uppercase tracking-widest text-center py-2 border-b border-neutral-800 shrink-0" title="Click an ingredient to add it to the wok. Cost and stats on hover.">Add</div>
+          <div className={`flex-1 min-h-0 flex gap-1 p-1.5 overflow-hidden ${viewport.isIpadPortrait ? 'flex-col overflow-y-auto' : 'flex-row'}`}>
+            {viewport.isIpadPortrait ? (
+              CATEGORIES.filter(c => ['PROTEINS', 'CARBS', 'VEGETABLES'].includes(c.id)).map(cat => (
+                <div key={cat.id} className="flex flex-col gap-1 shrink-0">
+                  <div className="text-[9px] text-neutral-400 font-bold uppercase tracking-wider truncate text-center shrink-0">
+                    {cat.name}
+                  </div>
+                  <div className="flex flex-col gap-1 w-[70%] mx-auto">
+                    {cat.items.map(itemId => {
+                      const item = ALL_ITEMS_BY_ID[itemId];
+                      if (!item) return null;
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => addIngredient(item.id)}
+                          disabled={wokContents.length >= 25 || burnProgress >= 100 || gameOver}
+                          title={`${item.name} $${item.cost.toFixed(2)} | Umami ${item.umami}/5 | Oil ${item.oiliness}/5`}
+                          className={`rounded-lg flex flex-col items-center justify-center gap-0.5 py-2 w-full transition-all bg-black ${item.text || 'text-neutral-100'} border-2 shadow-sm min-h-0 disabled:opacity-30 disabled:grayscale hover:brightness-110 active:translate-y-0.5 ${item.color ? item.color.replace('bg-', 'border-') : 'border-neutral-600'}`}
+                        >
+                          <span className="text-3xl leading-none drop-shadow-md">{String(item.icon)}</span>
+                          <span className="text-[9px] font-black text-white uppercase tracking-wider leading-tight w-full text-center px-0.5 drop-shadow-sm break-words">{String(item.name)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))
+            ) : (
+              CATEGORIES.filter(c => ['PROTEINS', 'CARBS', 'VEGETABLES'].includes(c.id)).map(cat => (
+                <div key={cat.id} className="flex-1 min-w-0 flex flex-col overflow-y-auto custom-scrollbar">
+                  <div className="text-[9px] text-neutral-400 font-bold uppercase tracking-wider truncate text-center pb-1 shrink-0">
+                    {cat.name}
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    {cat.items.map(itemId => {
+                      const item = ALL_ITEMS_BY_ID[itemId];
+                      if (!item) return null;
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => addIngredient(item.id)}
+                          disabled={wokContents.length >= 25 || burnProgress >= 100 || gameOver}
+                          title={`${item.name} $${item.cost.toFixed(2)} | Umami ${item.umami}/5 | Oil ${item.oiliness}/5`}
+                          className={`rounded-lg flex flex-col items-center justify-center gap-0.5 py-2 transition-all bg-black ${item.text || 'text-neutral-100'} border-2 shadow-sm w-full min-h-0 disabled:opacity-30 disabled:grayscale hover:brightness-110 active:translate-y-0.5 ${item.color ? item.color.replace('bg-', 'border-') : 'border-neutral-600'}`}
+                        >
+                          <span className="text-3xl leading-none drop-shadow-md">{String(item.icon)}</span>
+                          <span className="text-[9px] font-black text-white uppercase tracking-wider leading-tight w-full text-center px-0.5 drop-shadow-sm break-words">{String(item.name)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+        )}
+
+        {/* Center: Canvas (no Wok Hei here) */}
+        <div className="flex-1 h-full min-h-0 min-w-0 flex flex-row items-center justify-center gap-2 mx-1 overflow-hidden">
+          <div className="flex-1 min-w-0 h-full flex flex-col items-center justify-center relative overflow-hidden">
           {/* Cook / Burn progress overlay */}
           <div
             className="absolute top-0 w-full flex justify-between px-1 z-20 pointer-events-none transition-opacity duration-300"
             style={{ opacity: wokContents.length > 0 ? 1 : 0 }}
+            title="Cook and Burn meters. Serve when Cook is high and Burn is low. Toss to slow Burn."
           >
-            <div className="w-20 bg-black/60 rounded-lg border border-neutral-800 backdrop-blur-md p-1.5">
+            <div className="w-20 bg-black/60 rounded-lg border border-neutral-800 backdrop-blur-md p-1.5" title="Cook progress. High heat and tossing fill it.">
               <div className="flex justify-between text-[8px] mb-0.5 font-bold uppercase tracking-wider text-neutral-400">
                 <span>Cook</span>
                 <span className={cookProgress > 90 ? 'text-green-400' : 'text-white'}>{Math.floor(cookProgress)}%</span>
@@ -1199,35 +1436,20 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
               </div>
             </div>
 
-            <div className={`bg-black/60 rounded-lg border backdrop-blur-md flex flex-col items-center p-1 ${wokUmami.avg >= 3 ? 'border-amber-700/60' : 'border-neutral-800'}`}>
+            <div className={`bg-black/60 rounded-lg border backdrop-blur-md flex flex-col items-center p-1 ${wokUmami.avg >= 3 ? 'border-amber-700/60' : 'border-neutral-800'}`} title="Umami (旨味). Average from ingredients. Higher = flavor bonus.">
               <div className="text-[7px] font-black uppercase tracking-wider text-amber-500">旨味</div>
               <div className={`text-sm font-mono font-black ${wokUmami.avg >= 3 ? 'text-amber-300' : wokUmami.avg >= 2 ? 'text-amber-400' : 'text-neutral-500'}`}>
                 {wokUmami.avg.toFixed(1)}
               </div>
             </div>
 
-            <div className="w-20 bg-black/60 rounded-lg border border-neutral-800 backdrop-blur-md p-1.5">
+            <div className="w-20 bg-black/60 rounded-lg border border-neutral-800 backdrop-blur-md p-1.5" title="Burn meter. Toss to slow it. Don't let it hit 100%.">
               <div className="flex justify-between text-[8px] mb-0.5 font-bold uppercase tracking-wider text-neutral-400">
                 <span>Burn</span>
                 <span className={burnProgress > 75 ? 'text-red-500 animate-pulse' : 'text-white'}>{Math.floor(burnProgress)}%</span>
               </div>
               <div className="h-1 bg-neutral-900 rounded-full overflow-hidden">
                 <div className="h-full bg-red-600 transition-all duration-100" style={{ width: `${burnProgress}%` }} />
-              </div>
-            </div>
-          </div>
-
-          {/* Wok Hei meter */}
-          <div className="absolute right-0 top-1/2 transform -translate-y-1/2 flex flex-col items-center z-20">
-            <div
-              className={`text-[8px] font-black mb-1 text-fuchsia-500 tracking-widest ${wokHei > 80 ? 'animate-pulse drop-shadow-[0_0_5px_rgba(217,70,239,0.8)]' : 'opacity-50'}`}
-              style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
-            >
-              WOK HEI
-            </div>
-            <div className={`bg-black/50 border border-neutral-800 rounded-full overflow-hidden shadow-2xl flex flex-col justify-end backdrop-blur-sm transition-colors w-4 h-32 ${wokHei > 80 ? 'border-fuchsia-500/50 shadow-[0_0_30px_rgba(217,70,239,0.4)]' : ''}`}>
-              <div className="w-full transition-all duration-200 bg-gradient-to-t from-indigo-900 to-fuchsia-400 relative" style={{ height: `${wokHei}%` }}>
-                {wokHei > 80 && <div className="absolute inset-0 bg-white/20 animate-pulse" />}
               </div>
             </div>
           </div>
@@ -1247,13 +1469,184 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
             wokResidue={wokResidue}
             onSpill={handleSpill}
           />
+          </div>
+          {orders?.[0] && !orders[0].failed && (() => {
+            const order = orders[0];
+            const reqMap = {};
+            order.requires.forEach(req => { reqMap[req] = (reqMap[req] || 0) + 1; });
+            const wokFreq = {};
+            wokContents.forEach(id => { wokFreq[id] = (wokFreq[id] || 0) + 1; });
+            const totalRemaining = Object.keys(reqMap).reduce((sum, id) => sum + Math.max(0, (reqMap[id] || 0) - (wokFreq[id] || 0)), 0);
+            return (
+              <div className="shrink-0 bg-black/70 rounded-xl border border-neutral-700 p-4 max-h-[85%] overflow-y-auto custom-scrollbar z-10" title="Ingredients needed for current order. ✓ enough added, ✗ over-added.">
+                <div className="text-xs font-black text-neutral-400 uppercase tracking-wider mb-2">Current order</div>
+                <div className="text-sm text-amber-400 font-bold mb-3 truncate max-w-[270px]" title={order.name}>{order.name}</div>
+                <div className="text-xs text-neutral-300 font-bold mb-4">Remaining: <span className={totalRemaining === 0 ? 'text-green-400' : 'text-amber-400'}>{totalRemaining}</span></div>
+                <ul className="space-y-2">
+                  {Object.entries(reqMap).map(([id, needed]) => {
+                    const current = wokFreq[id] || 0;
+                    const remaining = Math.max(0, needed - current);
+                    const isSufficient = current >= needed;
+                    const isOver = current > needed;
+                    const item = ALL_ITEMS_BY_ID[id];
+                    if (!item) return null;
+                    return (
+                      <li key={id} className="flex items-center gap-3 text-sm">
+                        <span className="text-2xl leading-none shrink-0">{item.icon}</span>
+                        <span className="flex-1 min-w-0 truncate text-neutral-200" title={item.name}>{item.name}</span>
+                        <span className="text-neutral-500 shrink-0 tabular-nums">{current}/{needed}</span>
+                        {isSufficient && !isOver && <CheckCircle className="w-7 h-7 shrink-0 text-green-500" aria-label="enough" />}
+                        {isOver && <X className="w-7 h-7 shrink-0 text-red-500" aria-label="over-added" />}
+                        {!isSufficient && <span className="text-amber-400 shrink-0 tabular-nums">−{remaining}</span>}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            );
+          })()}
+        </div>
+
+        {!viewport.isIpadPortrait && (
+        <div className="flex flex-col shrink-0 h-full min-h-0 bg-[#151517] border border-[#0a0a0c] rounded-xl overflow-hidden shadow-[inset_0_0_20px_rgba(0,0,0,0.5)] z-20 w-[18.48rem]">
+          {/* Spices | Sauces */}
+          <div className="text-[10px] font-black text-neutral-400 uppercase tracking-widest text-center py-2 border-b border-neutral-800 shrink-0" title="Spices and sauces. Click to add to wok.">Spices & Sauces</div>
+          <div className={`flex-1 min-h-0 p-1.5 overflow-hidden flex gap-1 ${viewport.isIpadPortrait ? 'flex-col overflow-y-auto' : 'flex-row'}`}>
+            {viewport.isIpadPortrait ? (
+              <>
+                <div className="flex flex-col gap-1 shrink-0 w-[70%] mx-auto">
+                  <div className="text-[9px] text-neutral-400 font-bold uppercase tracking-wider truncate text-center shrink-0">Spices</div>
+                  <div className="flex flex-col gap-1">
+                    {(CATEGORIES.find(c => c.id === 'SPICES')?.items || []).map(itemId => {
+                      const item = ALL_ITEMS_BY_ID[itemId];
+                      if (!item) return null;
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => addIngredient(item.id)}
+                          disabled={wokContents.length >= 25 || burnProgress >= 100 || gameOver}
+                          title={`${item.name} $${item.cost.toFixed(2)} | Umami ${item.umami}/5 | Oil ${item.oiliness}/5`}
+                          className={`rounded-lg flex flex-col items-center justify-center gap-0.5 py-2 transition-all bg-black ${item.text || 'text-neutral-100'} border-2 shadow-sm w-full min-h-0 disabled:opacity-30 disabled:grayscale hover:brightness-110 active:translate-y-0.5 ${item.color ? item.color.replace('bg-', 'border-') : 'border-neutral-600'}`}
+                        >
+                          <span className="text-3xl leading-none drop-shadow-md">{String(item.icon)}</span>
+                          <span className="text-[9px] font-black text-white uppercase tracking-wider leading-tight w-full text-center px-0.5 drop-shadow-sm break-words">{String(item.name)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div className="flex flex-col gap-1 shrink-0 border-t border-neutral-800/70 pt-2 w-[70%] mx-auto">
+                  <div className="text-[9px] text-neutral-400 font-bold uppercase tracking-wider truncate text-center shrink-0">Sauces</div>
+                  <div className="flex flex-col gap-1">
+                    {(CATEGORIES.find(c => c.id === 'SAUCES')?.items || []).map(itemId => {
+                      const item = ALL_ITEMS_BY_ID[itemId];
+                      if (!item) return null;
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => addIngredient(item.id)}
+                          disabled={wokContents.length >= 25 || burnProgress >= 100 || gameOver}
+                          title={`${item.name} $${item.cost.toFixed(2)} | Umami ${item.umami}/5 | Oil ${item.oiliness}/5`}
+                          className={`rounded-lg flex flex-col items-center justify-center gap-0.5 py-2 transition-all bg-black ${item.text || 'text-neutral-100'} border-2 shadow-sm w-full min-h-0 disabled:opacity-30 disabled:grayscale hover:brightness-110 active:translate-y-0.5 ${item.color ? item.color.replace('bg-', 'border-') : 'border-neutral-600'}`}
+                        >
+                          <span className="text-3xl leading-none drop-shadow-md">{String(item.icon)}</span>
+                          <span className="text-[9px] font-black text-white uppercase tracking-wider leading-tight w-full text-center px-0.5 drop-shadow-sm break-words">{String(item.name)}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+            {/* Spices column 1 (3 items) */}
+            <div className="flex-1 min-w-0 flex flex-col overflow-y-auto custom-scrollbar gap-1">
+              <div className="text-[9px] text-neutral-400 font-bold uppercase tracking-wider truncate text-center shrink-0">Spices</div>
+              {(CATEGORIES.find(c => c.id === 'SPICES')?.items || []).slice(0, 3).map(itemId => {
+                const item = ALL_ITEMS_BY_ID[itemId];
+                if (!item) return null;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => addIngredient(item.id)}
+                    disabled={wokContents.length >= 25 || burnProgress >= 100 || gameOver}
+                    title={`${item.name} $${item.cost.toFixed(2)} | Umami ${item.umami}/5 | Oil ${item.oiliness}/5`}
+                    className={`rounded-lg flex flex-col items-center justify-center gap-0.5 py-2 transition-all bg-black ${item.text || 'text-neutral-100'} border-2 shadow-sm w-full min-h-0 disabled:opacity-30 disabled:grayscale hover:brightness-110 active:translate-y-0.5 ${item.color ? item.color.replace('bg-', 'border-') : 'border-neutral-600'}`}
+                  >
+                    <span className="text-3xl leading-none drop-shadow-md">{String(item.icon)}</span>
+                    <span className="text-[9px] font-black text-white uppercase tracking-wider leading-tight w-full text-center px-0.5 drop-shadow-sm break-words">{String(item.name)}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Spices column 2 (3 items) */}
+            <div className="flex-1 min-w-0 flex flex-col overflow-y-auto custom-scrollbar gap-1">
+              <div className="text-[9px] text-neutral-500 font-bold uppercase tracking-wider truncate text-center shrink-0">Spices</div>
+              {(CATEGORIES.find(c => c.id === 'SPICES')?.items || []).slice(3, 6).map(itemId => {
+                const item = ALL_ITEMS_BY_ID[itemId];
+                if (!item) return null;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => addIngredient(item.id)}
+                    disabled={wokContents.length >= 25 || burnProgress >= 100 || gameOver}
+                    title={`${item.name} $${item.cost.toFixed(2)} | Umami ${item.umami}/5 | Oil ${item.oiliness}/5`}
+                    className={`rounded-lg flex flex-col items-center justify-center gap-0.5 py-2 transition-all bg-black ${item.text || 'text-neutral-100'} border-2 shadow-sm w-full min-h-0 disabled:opacity-30 disabled:grayscale hover:brightness-110 active:translate-y-0.5 ${item.color ? item.color.replace('bg-', 'border-') : 'border-neutral-600'}`}
+                  >
+                    <span className="text-3xl leading-none drop-shadow-md">{String(item.icon)}</span>
+                    <span className="text-[9px] font-black text-white uppercase tracking-wider leading-tight w-full text-center px-0.5 drop-shadow-sm break-words">{String(item.name)}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Sauces column (4 items) */}
+            <div className="flex-1 min-w-0 flex flex-col overflow-y-auto custom-scrollbar gap-1">
+              <div className="text-[9px] text-neutral-400 font-bold uppercase tracking-wider truncate text-center shrink-0">Sauces</div>
+              {(CATEGORIES.find(c => c.id === 'SAUCES')?.items || []).map(itemId => {
+                const item = ALL_ITEMS_BY_ID[itemId];
+                if (!item) return null;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => addIngredient(item.id)}
+                    disabled={wokContents.length >= 25 || burnProgress >= 100 || gameOver}
+                    title={`${item.name} $${item.cost.toFixed(2)} | Umami ${item.umami}/5 | Oil ${item.oiliness}/5`}
+                    className={`rounded-lg flex flex-col items-center justify-center gap-0.5 py-2 transition-all bg-black ${item.text || 'text-neutral-100'} border-2 shadow-sm w-full min-h-0 disabled:opacity-30 disabled:grayscale hover:brightness-110 active:translate-y-0.5 ${item.color ? item.color.replace('bg-', 'border-') : 'border-neutral-600'}`}
+                  >
+                    <span className="text-3xl leading-none drop-shadow-md">{String(item.icon)}</span>
+                    <span className="text-[9px] font-black text-white uppercase tracking-wider leading-tight w-full text-center px-0.5 drop-shadow-sm break-words">{String(item.name)}</span>
+                  </button>
+                );
+              })}
+            </div>
+              </>
+            )}
+          </div>
+        </div>
+        )}
+
+        {/* Wok Hei meter */}
+        <div className="flex flex-col items-center justify-center shrink-0 z-20 py-2 h-full" title="Wok Hei. Build by tossing at high heat with oil. Boosts revenue.">
+          <div
+            className={`text-[8px] font-black mb-1 text-fuchsia-500 tracking-widest ${wokHei > 80 ? 'animate-pulse drop-shadow-[0_0_5px_rgba(217,70,239,0.8)]' : 'opacity-50'}`}
+            style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
+          >
+            WOK HEI
+          </div>
+          <div className={`bg-black/50 border border-neutral-800 rounded-full overflow-hidden shadow-2xl flex flex-col justify-end backdrop-blur-sm transition-colors flex-1 min-h-0 w-4 ${wokHei > 80 ? 'border-fuchsia-500/50 shadow-[0_0_30px_rgba(217,70,239,0.4)]' : ''}`}>
+            <div className="w-full transition-all duration-200 bg-gradient-to-t from-indigo-900 to-fuchsia-400 relative" style={{ height: `${wokHei}%` }}>
+              {wokHei > 80 && <div className="absolute inset-0 bg-white/20 animate-pulse" />}
+            </div>
+          </div>
         </div>
 
         {/* Right Column: Toss Pad + Actions */}
-        <div className="flex flex-col justify-center z-20 shrink-0 h-full gap-1.5 w-20 max-h-[90%]">
+        <div className="flex flex-col justify-center z-20 shrink-0 h-full gap-1.5 w-24 max-h-[90%]">
 
           {/* 2D Elliptical Toss Pad */}
-          <div className="flex flex-col flex-1 bg-neutral-900/80 rounded-[40px] border border-blue-900/50 relative shadow-[inset_0_0_20px_rgba(59,130,246,0.05)] min-h-0 py-4 px-1.5">
+          <div className="flex flex-col flex-1 bg-neutral-900/80 rounded-[40px] border border-blue-900/50 relative shadow-[inset_0_0_20px_rgba(59,130,246,0.05)] min-h-0 py-4 px-1.5" title="Drag to toss the wok. Tossing slows Burn and builds Wok Hei at high heat.">
             <div className={`font-black text-[8px] mb-1 z-10 pointer-events-none text-center transition-colors ${toss.x !== 0 || toss.y !== 0 ? 'text-blue-400 drop-shadow-[0_0_5px_rgba(96,165,250,0.8)]' : 'text-neutral-500'}`}>TOSS</div>
             <div
               className="relative flex-1 w-full flex justify-center items-center cursor-move touch-none"
@@ -1280,11 +1673,12 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
           </div>
 
           {/* Tactile Action Grid */}
-          <div className="grid grid-cols-2 w-full shrink-0 gap-1 h-12">
+          <div className="grid grid-cols-2 w-full shrink-0 min-w-0 gap-1.5 h-14">
             <button
               onClick={handleTrash}
               disabled={gameOver}
-              className="w-full h-full bg-neutral-800 hover:bg-neutral-700 border-black border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-red-500 flex flex-col items-center justify-center transition-all text-[8px] shadow-lg tracking-wider overflow-hidden disabled:opacity-30"
+              className="w-full min-w-0 h-full bg-neutral-800 hover:bg-neutral-700 border-black border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-red-500 flex flex-col items-center justify-center transition-all text-[9px] shadow-lg tracking-wider overflow-hidden disabled:opacity-30"
+              title="Discard everything in the wok. Resets combo."
             >
               <Trash2 className="w-4 h-4 mb-0.5 shrink-0" /> TRASH
             </button>
@@ -1293,7 +1687,8 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
               onPointerUp={handleCleanRelease}
               onPointerLeave={handleCleanRelease}
               disabled={wokContents.length > 0 || gameOver}
-              className="w-full h-full bg-blue-800 hover:bg-blue-700 border-blue-950 border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-white flex flex-col items-center justify-center transition-all text-[8px] disabled:opacity-30 shadow-lg tracking-wider overflow-hidden"
+              className="w-full min-w-0 h-full bg-blue-800 hover:bg-blue-700 border-blue-950 border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-white flex flex-col items-center justify-center transition-all text-[9px] disabled:opacity-30 shadow-lg tracking-wider overflow-hidden"
+              title="Clean the wok with water. Empty wok only."
             >
               <Droplets className="w-4 h-4 mb-0.5 shrink-0" /> CLEAN
             </button>
@@ -1302,22 +1697,25 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
             <button
               onClick={() => { if (!chefsSpecialMode) setSpecialMarkup(2.5); setChefsSpecialMode(prev => !prev); }}
               className={`w-full shrink-0 ${chefsSpecialMode ? 'bg-yellow-500 text-black border-yellow-700 ring-2 ring-yellow-300' : 'bg-orange-900/80 hover:bg-orange-800 text-orange-200 border-orange-950'} border-b-2 active:border-b-0 active:translate-y-0.5 rounded-xl font-bold flex items-center justify-center gap-1 transition-all shadow-lg text-[8px] tracking-wider h-8`}
+              title="Chef's Special: Mark up the dish and tap a ticket to serve as a special for higher price."
             >
               <ChefHat className="w-3 h-3" /> {chefsSpecialMode ? 'CANCEL' : "CHEF'S SPECIAL"}
             </button>
           )}
-          <div className="grid grid-cols-2 w-full shrink-0 gap-1 h-12">
+          <div className="grid grid-cols-2 w-full shrink-0 min-w-0 gap-1.5 h-14">
             <button
               onClick={() => serveDish(true)}
               disabled={gameOver}
-              className="w-full h-full bg-cyan-800 hover:bg-cyan-700 border-cyan-950 border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-cyan-100 flex flex-col items-center justify-center transition-all shadow-xl text-[8px] tracking-wider overflow-hidden disabled:opacity-30"
+              className="w-full min-w-0 h-full bg-cyan-800 hover:bg-cyan-700 border-cyan-950 border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-cyan-100 flex flex-col items-center justify-center transition-all shadow-xl text-[9px] tracking-wider overflow-hidden disabled:opacity-30"
+              title="Gift: Donate the dish for Soul. No order match needed."
             >
               <Heart className="w-4 h-4 mb-0.5 shrink-0" /> GIFT
             </button>
             <button
               onClick={() => serveDish(false)}
               disabled={gameOver}
-              className="w-full h-full bg-green-600 hover:bg-green-500 border-green-900 border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-white flex flex-col items-center justify-center transition-all shadow-xl text-[8px] tracking-wider overflow-hidden disabled:opacity-30"
+              className="w-full min-w-0 h-full bg-green-600 hover:bg-green-500 border-green-900 border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-white flex flex-col items-center justify-center transition-all shadow-xl text-[9px] tracking-wider overflow-hidden disabled:opacity-30"
+              title="Serve to a matching order for cash."
             >
               <CheckCircle className="w-4 h-4 mb-0.5 shrink-0" /> SERVE
             </button>
@@ -1327,11 +1725,72 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
             <button
               onClick={() => { setNewRecipeName(''); setShowSaveRecipe(true); }}
               className="w-full shrink-0 bg-amber-900/80 hover:bg-amber-800 border-amber-950 border-b-2 active:border-b-0 active:translate-y-0.5 rounded-xl font-bold text-amber-200 flex items-center justify-center gap-1 transition-all shadow-lg text-[8px] tracking-wider h-8"
+              title="Save current wok as a custom recipe."
             >
               <BookOpen className="w-3 h-3" /> SAVE
             </button>
           )}
         </div>
+
+        </div>
+
+        {/* iPad portrait only: all ingredients at bottom — 2 rows: Spices/Sauces top, Proteins/Carbs/Veg bottom */}
+        {viewport.isIpadPortrait && (
+          <div className="shrink-0 bg-[#151517] border-t-4 border-[#0a0a0c] w-full overflow-hidden py-2 px-1.5 flex flex-col gap-2 z-20 shadow-[0_-10px_30px_rgba(0,0,0,0.8)]">
+            {/* Top row: Spices & Sauces */}
+            <div className="flex flex-wrap gap-2 shrink-0 justify-center items-start">
+              {CATEGORIES.filter(c => ['SPICES', 'SAUCES'].includes(c.id)).map(cat => (
+                <div key={cat.id} className="flex flex-col gap-1 shrink-0 bg-neutral-900/60 rounded-lg p-1.5 border border-neutral-800">
+                  <div className="text-[8px] text-neutral-500 font-black uppercase tracking-widest text-center shrink-0">{cat.name}</div>
+                  <div className="flex gap-1 flex-wrap justify-center">
+                    {(cat.items || []).map(itemId => {
+                      const item = ALL_ITEMS_BY_ID[itemId];
+                      if (!item) return null;
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => addIngredient(item.id)}
+                          disabled={wokContents.length >= 25 || burnProgress >= 100 || gameOver}
+                          title={`${item.name} $${item.cost.toFixed(2)}`}
+                          className="rounded-md flex flex-col items-center justify-center gap-0 py-1 px-1.5 min-w-[2.75rem] shrink-0 transition-all bg-black border border-neutral-600 disabled:opacity-30 disabled:grayscale hover:brightness-110 active:translate-y-0.5"
+                        >
+                          <span className="text-xl leading-none">{String(item.icon)}</span>
+                          <span className="text-[8px] font-bold text-white uppercase tracking-tight leading-tight text-center line-clamp-2">{item.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {/* Bottom row: Proteins, Carbs, Vegetables */}
+            <div className="flex flex-wrap gap-2 shrink-0 justify-center items-start">
+              {CATEGORIES.filter(c => ['PROTEINS', 'CARBS', 'VEGETABLES'].includes(c.id)).map(cat => (
+                <div key={cat.id} className="flex flex-col gap-1 shrink-0 bg-neutral-900/60 rounded-lg p-1.5 border border-neutral-800">
+                  <div className="text-[8px] text-neutral-500 font-black uppercase tracking-widest text-center shrink-0">{cat.name}</div>
+                  <div className="flex gap-1 flex-wrap justify-center">
+                    {(cat.items || []).map(itemId => {
+                      const item = ALL_ITEMS_BY_ID[itemId];
+                      if (!item) return null;
+                      return (
+                        <button
+                          key={item.id}
+                          onClick={() => addIngredient(item.id)}
+                          disabled={wokContents.length >= 25 || burnProgress >= 100 || gameOver}
+                          title={`${item.name} $${item.cost.toFixed(2)}`}
+                          className="rounded-md flex flex-col items-center justify-center gap-0 py-1 px-1.5 min-w-[2.75rem] shrink-0 transition-all bg-black border border-neutral-600 disabled:opacity-30 disabled:grayscale hover:brightness-110 active:translate-y-0.5"
+                        >
+                          <span className="text-xl leading-none">{String(item.icon)}</span>
+                          <span className="text-[8px] font-bold text-white uppercase tracking-tight leading-tight text-center line-clamp-2">{item.name}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Save Recipe Dialog */}
@@ -1412,40 +1871,6 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
         </div>
       )}
 
-      {/* Ingredient Station */}
-      <div className="shrink-0 bg-[#151517] border-t-4 border-[#0a0a0c] w-full z-20 relative shadow-[0_-10px_30px_rgba(0,0,0,0.8)] p-1">
-        {[
-          CATEGORIES.filter(c => c.id === 'SPICES' || c.id === 'SAUCES'),
-          CATEGORIES.filter(c => c.id === 'PROTEINS' || c.id === 'CARBS' || c.id === 'VEGETABLES'),
-        ].map((row, rowIdx) => (
-          <div key={rowIdx} className="flex flex-wrap justify-center items-stretch gap-1 max-w-7xl mx-auto mb-1 last:mb-0">
-            {row.map(cat => (
-              <div key={cat.id} className="flex flex-col bg-neutral-900/40 rounded-xl p-1 border border-neutral-800/60 shadow-inner">
-                <div className="text-[7px] text-neutral-500 font-black uppercase tracking-widest text-center mb-1">
-                  {cat.name}
-                </div>
-                <div className="flex flex-wrap justify-center gap-1">
-                  {cat.items.map(itemId => {
-                    const item = ALL_ITEMS_BY_ID[itemId];
-                    if (!item) return null;
-                    return (
-                      <button
-                        key={item.id}
-                        onClick={() => addIngredient(item.id)}
-                        disabled={wokContents.length >= 25 || burnProgress >= 100 || gameOver}
-                        title={`${item.name} $${item.cost.toFixed(2)} | Umami ${item.umami}/5 | Oil ${item.oiliness}/5`}
-                        className={`rounded-lg flex flex-col items-center justify-center transition-all bg-black border-2 ${item.color.replace('bg-', 'border-')} shadow-md w-[38px] h-10 disabled:opacity-30 disabled:grayscale hover:brightness-125 active:translate-y-1`}
-                      >
-                        <span className="text-2xl leading-none filter drop-shadow-sm">{String(item.icon)}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        ))}
-      </div>
     </div>
   );
 }

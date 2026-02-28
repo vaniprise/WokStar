@@ -1,10 +1,10 @@
 // --- Story Campaign Data ---
 export const STORY_CHAPTERS = [
-  { target: 0, chapter: 0, title: "Chapter 1: The Fall of the Emperor", desc: "You were the arrogant 'Emperor of Eats'. But your evil apprentice framed you! Grab a rusty wok and start grinding out cheap fried rice to survive!", goal: "Earn $150 to buy a decent chef's knife.", color: "text-blue-400", border: "border-blue-900" },
-  { target: 150, chapter: 1, title: "Chapter 2: Temple Street Triads", desc: "You invent dishes so incredible the local triad bosses demand them! But now they want a hefty cut of your profits.", goal: "Earn $500 to pay off the local gangs.", color: "text-green-400", border: "border-green-900" },
-  { target: 500, chapter: 2, title: "Chapter 3: The 18 Bronze Chefs", desc: "You must master the ancient Dragon-Subduing Wok Tosses inside a giant brass bell at the Shaolin Culinary Monastery!", goal: "Earn $1,200 to graduate from Shaolin.", color: "text-yellow-400", border: "border-yellow-900" },
-  { target: 1200, chapter: 3, title: "Chapter 4: The Mega-Laser Wok", desc: "You only have your iron pan and your newfound Shaolin inner peace against Bullhorn's high-tech Mega-Laser Wok. Show them the true meaning of Wok Hei!", goal: "Earn $2,500 to expose the sabotage.", color: "text-orange-500", border: "border-orange-900" },
-  { target: 2500, chapter: 4, title: "Chapter 5: The Sorrowful Rice", desc: "Treachery! Bullhorn destroyed your premium ingredients! You must pour your soul into the legendary 'Sorrowful Rice'.", goal: "Earn $5,000 to ascend as the God of Cookery.", color: "text-red-500", border: "border-red-900" },
+  { target: 0, chapter: 0, title: "Chapter 1: The Fall of the Emperor", desc: "You were the arrogant 'Emperor of Eats'. But your evil apprentice framed you! Grab a rusty wok and start grinding out cheap fried rice to survive!", goal: "Reach a score of 150 to buy a decent chef's knife.", color: "text-blue-400", border: "border-blue-900" },
+  { target: 150, chapter: 1, title: "Chapter 2: Temple Street Triads", desc: "You invent dishes so incredible the local triad bosses demand them! But now they want a hefty cut of your profits.", goal: "Reach a score of 500 to pay off the local gangs.", color: "text-green-400", border: "border-green-900" },
+  { target: 500, chapter: 2, title: "Chapter 3: The 18 Bronze Chefs", desc: "You must master the ancient Dragon-Subduing Wok Tosses inside a giant brass bell at the Shaolin Culinary Monastery!", goal: "Reach a score of 1,200 to graduate from Shaolin.", color: "text-yellow-400", border: "border-yellow-900" },
+  { target: 1200, chapter: 3, title: "Chapter 4: The Mega-Laser Wok", desc: "You only have your iron pan and your newfound Shaolin inner peace against Bullhorn's high-tech Mega-Laser Wok. Show them the true meaning of Wok Hei!", goal: "Reach a score of 2,500 to expose the sabotage.", color: "text-orange-500", border: "border-orange-900" },
+  { target: 2500, chapter: 4, title: "Chapter 5: The Sorrowful Rice", desc: "Treachery! Bullhorn destroyed your premium ingredients! You must pour your soul into the legendary 'Sorrowful Rice'.", goal: "Reach a score of 5,000 to ascend as the God of Cookery.", color: "text-red-500", border: "border-red-900" },
   { target: 5000, chapter: 5, title: "EPILOGUE: Ascension", desc: "A divine light beams from the heavens. You are officially recognized by the celestial courts. You are the true SIK SAN!", goal: "Endless Glory.", color: "text-fuchsia-400", border: "border-fuchsia-900" }
 ];
 
@@ -39,7 +39,7 @@ export const CONDIMENTS = {
   XO_SAUCE: { id: 'xo_sauce', name: 'XO Sauce', color: 'bg-orange-800', icon: '🥫', text: 'text-orange-100', cost: 45.00, rarity: 4, umami: 5, oiliness: 4 },
   WINE: { id: 'wine', name: 'Shaoxing Wine', color: 'bg-amber-700', icon: '🍶', text: 'text-amber-100', cost: 2.50, rarity: 2, umami: 1, oiliness: 0 },
   MSG: { id: 'msg', name: 'M.S.G.', color: 'bg-slate-200', icon: '✨', text: 'text-slate-800', cost: 0.80, rarity: 1, umami: 5, oiliness: 0 },
-  WHITE_PEPPER: { id: 'white_pepper', name: 'White Pepper', color: 'bg-stone-200', icon: '🧂', text: 'text-stone-800', cost: 1.20, rarity: 1, umami: 1, oiliness: 0 },
+  WHITE_PEPPER: { id: 'white_pepper', name: 'White Pepper', color: 'bg-stone-200', icon: '⚪️', text: 'text-stone-800', cost: 1.20, rarity: 1, umami: 1, oiliness: 0 },
   FIVE_SPICE: { id: 'five_spice', name: 'Five Spice', color: 'bg-amber-900', icon: '🌰', text: 'text-amber-100', cost: 1.50, rarity: 2, umami: 1, oiliness: 0 },
   SALT: { id: 'salt', name: 'Salt', color: 'bg-gray-100', icon: '🧂', text: 'text-gray-800', cost: 0.10, rarity: 1, umami: 2, oiliness: 0 },
   SUGAR: { id: 'sugar', name: 'Sugar', color: 'bg-sky-50', icon: '🧊', text: 'text-sky-900', cost: 0.20, rarity: 1, umami: 0, oiliness: 0 },
@@ -88,3 +88,49 @@ export const UPGRADES = [
   { id: 'golden_confetti', name: "Sik San's Confetti", desc: "Cosmetic: Perfect serves explode in pure gold confetti.", cost: 2500, icon: "✨" },
   { id: 'rolex', name: "Triad Boss Rolex", desc: "Cosmetic: Adds a sparkling diamond to your cash display.", cost: 5000, icon: "⌚" },
 ];
+
+// --- Restaurant Minigame (retention mechanics) ---
+export const RESTAURANT_CONTRACT_TEMPLATES = [
+  { id: 'serve_5', name: 'Serve 5 dishes', type: 'serve_count', target: 5, rewardXP: 15, rewardCash: 10 },
+  { id: 'serve_10', name: 'Serve 10 dishes', type: 'serve_count', target: 10, rewardXP: 35, rewardCash: 25 },
+  { id: 'earn_100', name: 'Earn $100 in one shift', type: 'earn_cash', target: 100, rewardXP: 20, rewardCash: 15 },
+  { id: 'earn_200', name: 'Earn $200 in one shift', type: 'earn_cash', target: 200, rewardXP: 45, rewardCash: 30 },
+  { id: 'no_burn', name: 'Complete shift without burning', type: 'no_burn', target: 1, rewardXP: 25, rewardCash: 20 },
+  { id: 'combo_5', name: 'Hit a 5-combo', type: 'max_combo', target: 5, rewardXP: 20, rewardCash: 12 },
+  { id: 'combo_8', name: 'Hit an 8-combo', type: 'max_combo', target: 8, rewardXP: 40, rewardCash: 25 },
+  { id: 'perfect_2', name: 'Serve 2 perfect dishes', type: 'perfect_serve', target: 2, rewardXP: 30, rewardCash: 20 },
+  { id: 'gift_1', name: 'Gift 1 dish to charity', type: 'gift_count', target: 1, rewardXP: 20, rewardCash: 0 },
+  { id: 'special_1', name: 'Serve 1 Chef\'s Special', type: 'special_serve', target: 1, rewardXP: 35, rewardCash: 25 },
+];
+
+const XP_PER_LEVEL = 100;
+export const getRestaurantLevel = (xp) => Math.floor(xp / XP_PER_LEVEL) + 1;
+export const getXPProgress = (xp) => {
+  const level = getRestaurantLevel(xp);
+  const xpForCurrentLevel = (level - 1) * XP_PER_LEVEL;
+  const xpIntoLevel = xp - xpForCurrentLevel;
+  return { level, xpIntoLevel, xpForNextLevel: XP_PER_LEVEL, progress: xpIntoLevel / XP_PER_LEVEL };
+};
+
+export const getDailySpecialRecipeId = () => {
+  const today = new Date().toDateString();
+  let hash = 0;
+  for (let i = 0; i < today.length; i++) hash = ((hash << 5) - hash) + today.charCodeAt(i);
+  const idx = Math.abs(hash) % RECIPES.length;
+  return RECIPES[idx].id;
+};
+
+export const getDailyContracts = () => {
+  const today = new Date().toDateString();
+  let hash = 0;
+  for (let i = 0; i < today.length; i++) hash = ((hash << 5) - hash) + today.charCodeAt(i);
+  const rng = (seed) => {
+    const x = Math.sin(seed) * 10000;
+    return x - Math.floor(x);
+  };
+  const indices = new Set();
+  while (indices.size < 3) {
+    indices.add(Math.floor(rng(hash + indices.size * 7) * RESTAURANT_CONTRACT_TEMPLATES.length));
+  }
+  return [...indices].map(i => ({ ...RESTAURANT_CONTRACT_TEMPLATES[i], progress: 0 }));
+};
