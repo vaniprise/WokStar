@@ -3,6 +3,8 @@ import { Flame, ChefHat, AlertTriangle, CheckCircle, Trash2, ChevronRight, Chevr
 import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, onSnapshot } from 'firebase/firestore';
+import GameLoop from './GameLoop';
+import { initAudio as initAudioEngine } from './audioEngine';
 
 // ==========================================
 // DIFFICULTY SCALING
@@ -389,32 +391,32 @@ const getScoreTitle = (score) => {
 
 const ALL_ITEMS = {
   // BASES
-  rice: { id: 'rice', name: 'Day-Old Rice', color: 'bg-yellow-50', icon: '🍚', cost: 1.50, rarity: 1 },
-  noodle: { id: 'noodle', name: 'Ho Fun', color: 'bg-orange-100', icon: '🍜', cost: 2.20, rarity: 1 },
+  rice: { id: 'rice', name: 'Day-Old Rice', color: 'bg-yellow-50', icon: '🍚', cost: 1.50, rarity: 1, umami: 1, oiliness: 0 },
+  noodle: { id: 'noodle', name: 'Ho Fun', color: 'bg-orange-100', icon: '🍜', cost: 2.20, rarity: 1, umami: 1, oiliness: 1 },
   // MEATS
-  egg: { id: 'egg', name: 'Beaten Egg', color: 'bg-yellow-400', icon: '🥚', cost: 1.80, rarity: 1 },
-  beef: { id: 'beef', name: 'Velvet Beef', color: 'bg-red-800', icon: '🥩', cost: 11.50, rarity: 3 },
-  char_siu: { id: 'char_siu', name: 'Char Siu', color: 'bg-red-900', icon: '🍖', text: 'text-white', cost: 85.00, rarity: 4 },
-  shrimp: { id: 'shrimp', name: 'Fresh Prawn', color: 'bg-pink-200', icon: '🦐', cost: 25.00, rarity: 3 },
+  egg: { id: 'egg', name: 'Beaten Egg', color: 'bg-yellow-400', icon: '🥚', cost: 1.80, rarity: 1, umami: 2, oiliness: 2 },
+  beef: { id: 'beef', name: 'Velvet Beef', color: 'bg-red-800', icon: '🥩', cost: 11.50, rarity: 3, umami: 3, oiliness: 3 },
+  char_siu: { id: 'char_siu', name: 'Char Siu', color: 'bg-red-900', icon: '🍖', text: 'text-white', cost: 85.00, rarity: 4, umami: 3, oiliness: 4 },
+  shrimp: { id: 'shrimp', name: 'Fresh Prawn', color: 'bg-pink-200', icon: '🦐', cost: 25.00, rarity: 3, umami: 3, oiliness: 1 },
   // VEGES
-  gai_lan: { id: 'gai_lan', name: 'Gai Lan', color: 'bg-emerald-600', icon: '🥬', text: 'text-white', cost: 3.50, rarity: 2 },
-  mushroom: { id: 'mushroom', name: 'Shiitake', color: 'bg-stone-700', icon: '🍄', text: 'text-white', cost: 9.50, rarity: 2 },
+  gai_lan: { id: 'gai_lan', name: 'Gai Lan', color: 'bg-emerald-600', icon: '🥬', text: 'text-white', cost: 3.50, rarity: 2, umami: 1, oiliness: 0 },
+  mushroom: { id: 'mushroom', name: 'Shiitake', color: 'bg-stone-700', icon: '🍄', text: 'text-white', cost: 9.50, rarity: 2, umami: 4, oiliness: 1 },
   // AROMATICS
-  scallion: { id: 'scallion', name: 'Scallions', color: 'bg-green-500', icon: '🌿', cost: 0.70, rarity: 1 },
-  garlic: { id: 'garlic', name: 'Garlic', color: 'bg-orange-50', icon: '🧄', cost: 0.50, rarity: 1 },
-  ginger: { id: 'ginger', name: 'Ginger', color: 'bg-amber-200', icon: '🫚', cost: 0.60, rarity: 1 },
+  scallion: { id: 'scallion', name: 'Scallions', color: 'bg-green-500', icon: '🌿', cost: 0.70, rarity: 1, umami: 1, oiliness: 0 },
+  garlic: { id: 'garlic', name: 'Garlic', color: 'bg-orange-50', icon: '🧄', cost: 0.50, rarity: 1, umami: 2, oiliness: 1 },
+  ginger: { id: 'ginger', name: 'Ginger', color: 'bg-amber-200', icon: '🫚', cost: 0.60, rarity: 1, umami: 1, oiliness: 0 },
   // SPICES
-  chili: { id: 'chili', name: 'Birdseye Chili', color: 'bg-red-600', icon: '🌶️', text: 'text-white', cost: 1.20, rarity: 2 },
-  white_pepper: { id: 'white_pepper', name: 'White Pepper', color: 'bg-stone-200', icon: '🧂', text: 'text-stone-800', cost: 1.20, rarity: 1 },
-  five_spice: { id: 'five_spice', name: 'Five Spice', color: 'bg-amber-900', icon: '🌰', text: 'text-amber-100', cost: 1.50, rarity: 2 },
-  salt: { id: 'salt', name: 'Salt', color: 'bg-gray-100', icon: '🧂', text: 'text-gray-800', cost: 0.10, rarity: 1 },
-  sugar: { id: 'sugar', name: 'Sugar', color: 'bg-sky-50', icon: '🧊', text: 'text-sky-900', cost: 0.20, rarity: 1 },
-  msg: { id: 'msg', name: 'M.S.G.', color: 'bg-slate-200', icon: '✨', text: 'text-slate-800', cost: 0.80, rarity: 1 },
+  chili: { id: 'chili', name: 'Birdseye Chili', color: 'bg-red-600', icon: '🌶️', text: 'text-white', cost: 1.20, rarity: 2, umami: 1, oiliness: 0 },
+  white_pepper: { id: 'white_pepper', name: 'White Pepper', color: 'bg-stone-200', icon: '🧂', text: 'text-stone-800', cost: 1.20, rarity: 1, umami: 1, oiliness: 0 },
+  five_spice: { id: 'five_spice', name: 'Five Spice', color: 'bg-amber-900', icon: '🌰', text: 'text-amber-100', cost: 1.50, rarity: 2, umami: 1, oiliness: 0 },
+  salt: { id: 'salt', name: 'Salt', color: 'bg-gray-100', icon: '🧂', text: 'text-gray-800', cost: 0.10, rarity: 1, umami: 2, oiliness: 0 },
+  sugar: { id: 'sugar', name: 'Sugar', color: 'bg-sky-50', icon: '🧊', text: 'text-sky-900', cost: 0.20, rarity: 1, umami: 0, oiliness: 0 },
+  msg: { id: 'msg', name: 'M.S.G.', color: 'bg-slate-200', icon: '✨', text: 'text-slate-800', cost: 0.80, rarity: 1, umami: 5, oiliness: 0 },
   // SAUCES
-  soy_sauce: { id: 'soy_sauce', name: 'Soy Sauce', color: 'bg-stone-800', icon: '🫖', text: 'text-stone-200', cost: 0.50, rarity: 1 },
-  oyster_sauce: { id: 'oyster_sauce', name: 'Oyster Sauce', color: 'bg-amber-900', icon: '🫙', text: 'text-amber-200', cost: 1.80, rarity: 2 },
-  xo_sauce: { id: 'xo_sauce', name: 'XO Sauce', color: 'bg-orange-800', icon: '🥫', text: 'text-orange-100', cost: 45.00, rarity: 4 },
-  wine: { id: 'wine', name: 'Shaoxing Wine', color: 'bg-amber-700', icon: '🍶', text: 'text-amber-100', cost: 2.50, rarity: 2 },
+  soy_sauce: { id: 'soy_sauce', name: 'Soy Sauce', color: 'bg-stone-800', icon: '🫖', text: 'text-stone-200', cost: 0.50, rarity: 1, umami: 4, oiliness: 0 },
+  oyster_sauce: { id: 'oyster_sauce', name: 'Oyster Sauce', color: 'bg-amber-900', icon: '🫙', text: 'text-amber-200', cost: 1.80, rarity: 2, umami: 4, oiliness: 1 },
+  xo_sauce: { id: 'xo_sauce', name: 'XO Sauce', color: 'bg-orange-800', icon: '🥫', text: 'text-orange-100', cost: 45.00, rarity: 4, umami: 5, oiliness: 4 },
+  wine: { id: 'wine', name: 'Shaoxing Wine', color: 'bg-amber-700', icon: '🍶', text: 'text-amber-100', cost: 2.50, rarity: 2, umami: 1, oiliness: 0 },
 };
 
 const CATEGORIES = [
@@ -467,6 +469,189 @@ const UPGRADES = [
   { id: 'neon_hat', name: "Neon Chef Hat", desc: "Cosmetic: Upgrades your UI Chef Hat to a glowing neon pink.", cost: 1500, icon: "🧢" },
   { id: 'golden_confetti', name: "Sik San's Confetti", desc: "Cosmetic: Perfect serves explode in pure gold confetti.", cost: 2500, icon: "✨" },
   { id: 'rolex', name: "Triad Boss Rolex", desc: "Cosmetic: Adds a sparkling diamond to your cash display.", cost: 5000, icon: "⌚" },
+];
+
+// ==========================================
+// NPC CHARACTERS & SIDE QUESTS
+// ==========================================
+const NPC_CHARACTERS = {
+  turkey:    { name: "Turkey",           chName: "火雞",     icon: "🐔", color: "text-pink-400",    border: "border-pink-700",    bg: "from-pink-950/90" },
+  goose:     { name: "Goose",            chName: "鵝頭",     icon: "🦢", color: "text-emerald-400", border: "border-emerald-700", bg: "from-emerald-950/90" },
+  master:    { name: "Wet Dream Master", chName: "夢遺大師", icon: "🧘", color: "text-yellow-400",  border: "border-yellow-700",  bg: "from-yellow-950/90" },
+  sister13:  { name: "Sister Thirteen",  chName: "十三姨",   icon: "🥢", color: "text-red-400",     border: "border-red-700",     bg: "from-red-950/90" },
+  bull_tong: { name: "Bull Tong",        chName: "唐牛",     icon: "🐂", color: "text-orange-400",  border: "border-orange-700",  bg: "from-orange-950/90" },
+};
+
+const SIDE_QUESTS = [
+  {
+    id: 'turkey_ch1', npc: 'turkey', chapter: 1,
+    title: "Pissing Beef Balls",
+    dialog: [
+      "「吖，大佬，你個樣咁衰，一定未食過我嘅撒尿牛丸！」",
+      "(Hey, big shot, you look terrible — you clearly haven't tried my Pissing Beef Balls!)",
+      "A street hawker with a face only a mother could love blocks your path. She shoves a skewer of suspiciously bouncy beef balls under your nose. They smell... incredible."
+    ],
+    choices: [
+      {
+        id: 'sell', label: '💰 "Thanks. I\'ll sell these for a nice profit."',
+        response: "「你同嗰個唐牛冇分別。」(You're no different from Bull Tong.)",
+        effects: { cashBonus: 75 },
+        desc: "+$75 instant cash. But Turkey remembers your greed..."
+      },
+      {
+        id: 'gift', label: '🤍 "These are incredible... teach me your secret."',
+        response: "「你...都識煮嘢食嘅？」(You... actually know how to cook?)",
+        effects: { soulBonus: 5, turkeyBurnBuff: true },
+        desc: "+5 Soul. Permanent -10% burn rate. Turkey becomes your ally."
+      }
+    ]
+  },
+  {
+    id: 'goose_ch2', npc: 'goose', chapter: 2,
+    title: "The Triad Banquet",
+    dialog: [
+      "「大佬話今晚有飯局。你煮，我罩你。你唔煮...你知啦。」",
+      "(Big Boss says there's a dinner tonight. You cook, I protect you. You don't cook... you know what happens.)",
+      "A man with a neck like a giraffe cracks his knuckles. Behind him, several men in dark suits adjust their sunglasses. His food blog — 'Anonymous Foodie 14K' — peeks from his phone screen."
+    ],
+    choices: [
+      {
+        id: 'accept', label: '🤝 "Tell the Boss to bring his appetite."',
+        response: "「好！今晚你係我嘅人！」(Good! Tonight, you're under my wing!)",
+        effects: { cashBonus: 200, gooseProtection: true },
+        desc: "+$200 cash. Failed orders only cost half a reputation star this run."
+      },
+      {
+        id: 'refuse', label: '✊ "I cook for the people, not the triads."',
+        response: "「夠膽唔接？你有種！我記住你。」(You dare refuse? Gutsy! I'll remember you.)",
+        effects: { soulBonus: 3, gooseRespect: true, triadPressure: true },
+        desc: "+3 Soul. Special events appear 2x more often. But Goose returns in Ch4 with a better offer."
+      }
+    ]
+  },
+  {
+    id: 'sister13_ch2', npc: 'sister13', chapter: 2,
+    title: "The Golden Chopstick Review",
+    dialog: [
+      "「我聽講你以前係食神。Show me.」",
+      "(I heard you used to be the God of Cookery. Show me.)",
+      "She taps two golden chopsticks together. The sound rings like a temple bell. Every customer goes silent. This is Sister Thirteen — the critic who has never given more than 3 stars."
+    ],
+    choices: [
+      {
+        id: 'accept_review', label: '🔥 "Watch closely. I only cook once."',
+        response: "「大口氣。我鍾意。」(Big talk. I like it.)",
+        effects: { sister13Active: true },
+        desc: "HIGH RISK: Next perfect dish (95%+ cook, <10% burn, 85%+ Wok Hei) = permanent +15% revenue. Anything less = permanent -1 reputation star."
+      },
+      {
+        id: 'decline_review', label: '😤 "I don\'t cook for critics."',
+        response: "「怕？」(Scared?)",
+        effects: {},
+        desc: "No risk, no reward. Sister Thirteen leaves without a word."
+      }
+    ]
+  },
+  {
+    id: 'master_ch3', npc: 'master', chapter: 3,
+    title: "The 18 Bronze Wok Tosses",
+    dialog: [
+      "「鑊氣即係人氣。你嘅人氣...唔夠。」",
+      "(Wok Hei is life force. Your life force... is insufficient.)",
+      "The ancient abbot strokes an eyebrow so long it nearly dips into his soup. He smells faintly of sesame oil and enlightenment. Three paths lie before you in the great bronze bell."
+    ],
+    choices: [
+      {
+        id: 'tiger', label: '🐯 Tiger Claw — "I want POWER."',
+        response: "「猛虎出山！燒咗都唔好驚！」(The tiger descends! Don't fear the burn!)",
+        effects: { masterPath: 'tiger' },
+        desc: "+40% Wok Hei generation. +25% Burn rate. Aggressive mastery."
+      },
+      {
+        id: 'water', label: '💧 Flowing Water — "I want CONTROL."',
+        response: "「上善若水。水...唔會燒嘅。」(The highest good is like water. Water doesn't burn.)",
+        effects: { masterPath: 'water' },
+        desc: "-40% Burn rate. -20% Wok Hei generation. Patient mastery."
+      },
+      {
+        id: 'middle', label: '☯️ Middle Way — "Balance is strength."',
+        response: "「你終於明白喇。」(You finally understand.)",
+        effects: { masterPath: 'middle' },
+        desc: "+15% Wok Hei, -15% Burn rate, Abbot's Spoon 50% off.",
+        requiresSoul: 10
+      }
+    ]
+  },
+  {
+    id: 'bull_tong_ch4', npc: 'bull_tong', chapter: 4,
+    title: "Sabotage!",
+    dialog: [
+      "「師傅...定係應該叫你...洗碗工？」",
+      "(Master... or should I call you... dishwasher?)",
+      "A letter arrives bearing Bull Tong's golden bull seal. Inside: a photo of your ingredient supply, crossed out in red marker. A note reads: 'The Mega-Laser Wok sends its regards.'"
+    ],
+    choices: [
+      {
+        id: 'endure', label: '🛡️ "I\'ll survive whatever you throw at me."',
+        response: "「我哋睇吓。」(We'll see about that.)",
+        effects: { sabotageActive: true, sabotageLevel: 'normal' },
+        desc: "Bull Tong sabotages your kitchen: -20% revenue and random burner shutoffs."
+      },
+      {
+        id: 'counter', label: '🔥 "Bring it. I\'ll turn your sabotage into seasoning."',
+        response: "「你...仲敢反抗？！」(You dare fight back?!)",
+        effects: { sabotageActive: true, sabotageLevel: 'hard', counterBonus: true },
+        desc: "Harder: -35% revenue & more shutoffs. BUT +40% bonus cash on every serve. High risk, high reward."
+      }
+    ]
+  },
+  {
+    id: 'goose_ch4', npc: 'goose', chapter: 4,
+    requires: { questId: 'goose_ch2', choiceId: 'refuse' },
+    title: "Goose's Redemption",
+    dialog: [
+      "「阿哥，我收皮喇。教我煮嘢食，我幫你對付唐牛。」",
+      "(Brother, I'm done with gang life. Teach me to cook, and I'll help you fight Bull Tong.)",
+      "Goose stands before you in an apron, neck held high. His blog 'Anonymous Foodie 14K' just hit 50,000 followers. For the first time, he looks sincere."
+    ],
+    choices: [
+      {
+        id: 'teach', label: '🤝 "Grab a wok. First lesson\'s free."',
+        response: "「多謝你...真係多謝。」(Thank you... truly thank you.)",
+        effects: { gooseAlly: true },
+        desc: "Goose joins you! +50% special event bonus cash. Weakens Bull Tong's sabotage."
+      },
+      {
+        id: 'refuse_again', label: '😤 "Too late. I work alone."',
+        response: "「...我明白。」(...I understand.)",
+        effects: {},
+        desc: "Goose leaves for good. No bonus."
+      }
+    ]
+  },
+  {
+    id: 'turkey_ch5', npc: 'turkey', chapter: 5,
+    title: "The Heart of Wok Hei",
+    dialog: [
+      "「你夠喇，唐牛！佢煮嘅嘢有心，你嘅冇！」",
+      "(Enough, Bull Tong! His cooking has HEART. Yours doesn't!)",
+      "Turkey steps between you and Bull Tong's camera crew. Tears stream down her scarred face. The studio audience gasps. Even the Mega-Laser Wok flickers and dies."
+    ],
+    choices: [
+      {
+        id: 'together', label: '😭 "Cook with me. The Sorrowful Rice — together."',
+        response: "「眼淚，就係最好嘅調味料。」(Tears... are the best seasoning.)",
+        effects: { turkeyAlly: true, bullTongWeakened: true, sorrowfulBuff: true },
+        desc: "Turkey neutralizes sabotage! Sorrowful Rice earns +50%. Your tears season the wok."
+      },
+      {
+        id: 'alone', label: '💪 "Stand back. This is MY fight."',
+        response: "「...你真係傻㗎。但我信你。」(...You're an idiot. But I believe in you.)",
+        effects: { soloFinale: true },
+        desc: "+30% cash multiplier for Ch5. But Bull Tong's sabotage stays at full strength."
+      }
+    ]
+  },
 ];
 
 // ==========================================
@@ -528,6 +713,11 @@ export default function App() {
   const [score, setScore] = useState(0); 
   const [cash, setCash] = useState(0);   
   const [soul, setSoul] = useState(0);
+  const [customRecipes, setCustomRecipes] = useState(() => {
+    try { return JSON.parse(localStorage.getItem('wokstar_custom_recipes') || '[]'); } catch { return []; }
+  });
+  const [showSaveRecipe, setShowSaveRecipe] = useState(false);
+  const [newRecipeName, setNewRecipeName] = useState('');
   const [ownedUpgrades, setOwnedUpgrades] = useState([]);
   
   const [combo, setCombo] = useState(1);
@@ -575,6 +765,10 @@ export default function App() {
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
+  useEffect(() => {
+    localStorage.setItem('wokstar_custom_recipes', JSON.stringify(customRecipes));
+  }, [customRecipes]);
+
   const [showGuide, setShowGuide] = useState(false);
   const [showRecipes, setShowRecipes] = useState(false);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
@@ -586,6 +780,10 @@ export default function App() {
   const [leaderboard, setLeaderboard] = useState([]);
   const [playerName, setPlayerName] = useState('');
   const [scoreSubmitted, setScoreSubmitted] = useState(false);
+
+  const [questLog, setQuestLog] = useState({});
+  const [npcBuffs, setNpcBuffs] = useState({});
+  const [npcEncounter, setNpcEncounter] = useState(null);
 
   const canvasRef = useRef(null);
   
@@ -603,7 +801,7 @@ export default function App() {
 
   const gameDataRef = useRef({
     heatLevel: 0, wokContents: [], cookProgress: 0, burnProgress: 0, wokHei: 0, wokResidue: 0,
-    isTossing: false, tossTriggered: false, isCleaning: false, spawnedIngredients: [],
+    isTossing: false, tossTriggered: false, lastTossTime: 0, isCleaning: false, spawnedIngredients: [],
     showGuide: false, showLeaderboard: false, showShop: false, showRecipes: false, flameTheme: 'standard',
     serveTriggered: null, trashTriggered: false, orderFailedTriggered: false, ownedUpgrades: [],
     activePrepBuff: null,
@@ -614,12 +812,13 @@ export default function App() {
     isOiling: false,
     waterLevel: 0,
     waterDirtiness: 0,
-    cleanTossTriggered: false
+    cleanTossTriggered: false,
+    npcBuffs: {}
   });
 
   useEffect(() => {
-    gameDataRef.current = { ...gameDataRef.current, heatLevel, wokContents, cookProgress, burnProgress, wokHei, wokResidue, isCleaning, showGuide, showLeaderboard, showShop, showRecipes, flameTheme, ownedUpgrades, activePrepBuff, difficulty, oilLevel, isOiling, toss, waterLevel, waterDirtiness };
-  }, [heatLevel, wokContents, cookProgress, burnProgress, wokHei, wokResidue, isCleaning, showGuide, showLeaderboard, showShop, showRecipes, flameTheme, ownedUpgrades, activePrepBuff, difficulty, oilLevel, isOiling, toss, waterLevel, waterDirtiness]);
+    gameDataRef.current = { ...gameDataRef.current, heatLevel, wokContents, cookProgress, burnProgress, wokHei, wokResidue, isCleaning, showGuide, showLeaderboard, showShop, showRecipes, flameTheme, ownedUpgrades, activePrepBuff, difficulty, oilLevel, isOiling, toss, waterLevel, waterDirtiness, npcBuffs };
+  }, [heatLevel, wokContents, cookProgress, burnProgress, wokHei, wokResidue, isCleaning, showGuide, showLeaderboard, showShop, showRecipes, flameTheme, ownedUpgrades, activePrepBuff, difficulty, oilLevel, isOiling, toss, waterLevel, waterDirtiness, npcBuffs]);
 
   useEffect(() => {
     if (!auth) return;
@@ -691,7 +890,10 @@ export default function App() {
           return { ...order, timeLeft };
         }).filter(o => o.timeLeft > -2); 
 
-        if (repLost > 0) setReputation(r => Math.max(0, r - repLost));
+        if (repLost > 0) {
+            const repPerFail = state.npcBuffs?.gooseProtection ? 0.5 : 1;
+            setReputation(r => Math.max(0, r - repLost * repPerFail));
+        }
         return newOrders;
       });
 
@@ -702,7 +904,8 @@ export default function App() {
         let baseRecipe = availableRecipes[Math.floor(Math.random() * availableRecipes.length)];
         let newOrder = { ...baseRecipe, id: Date.now(), timeLeft: baseRecipe.timeLimit };
         
-        if ((!isStoryMode || currentChapter > 0) && Math.random() < 0.25) {
+        const eventChance = state.npcBuffs?.triadPressure ? 0.45 : 0.25;
+        if ((!isStoryMode || currentChapter > 0) && Math.random() < eventChance) {
             const event = SPECIAL_EVENTS[Math.floor(Math.random() * SPECIAL_EVENTS.length)];
             if (!(event.id === 'spicy' && baseRecipe.requires.includes('chili')) &&
                 !(event.id === 'drunk' && baseRecipe.requires.includes('wine'))) {
@@ -761,6 +964,14 @@ export default function App() {
          setOilLevel(prev => Math.max(0, prev - (state.heatLevel - 80) * 0.03)); 
       }
 
+      if (state.npcBuffs?.sabotageActive && !state.npcBuffs?.turkeyAlly) {
+         const shutoffChance = state.npcBuffs?.sabotageLevel === 'hard' ? 0.004 : 0.002;
+         if (Math.random() < shutoffChance) {
+            setHeatLevel(0);
+            showNotification("SABOTAGE! 🐂 Bull Tong killed your burner!", "error");
+         }
+      }
+
       if (state.wokContents.length > 0) {
         let newCook = state.cookProgress;
         let newBurn = state.burnProgress;
@@ -773,23 +984,42 @@ export default function App() {
         let whMult = 1;
         if (state.ownedUpgrades.includes('spatula')) whMult += 0.2;
         if (state.ownedUpgrades.includes('dragon_wok')) whMult += 1.0;
+        if (state.npcBuffs?.masterPath === 'tiger') whMult += 0.4;
+        if (state.npcBuffs?.masterPath === 'middle') whMult += 0.15;
+        if (state.npcBuffs?.masterPath === 'water') whMult -= 0.2;
 
         let burnResist = 1;
         if (state.ownedUpgrades.includes('turbo_burner')) burnResist += 0.5; 
-        if (state.ownedUpgrades.includes('monk_spoon')) burnResist -= 0.8; 
+        if (state.ownedUpgrades.includes('monk_spoon')) burnResist -= 0.8;
+        if (state.npcBuffs?.turkeyBurnBuff) burnResist -= 0.1;
+        if (state.npcBuffs?.masterPath === 'tiger') burnResist += 0.25;
+        if (state.npcBuffs?.masterPath === 'water') burnResist -= 0.4;
+        if (state.npcBuffs?.masterPath === 'middle') burnResist -= 0.15;
 
         let cookSpeedMod = 1;
         if (state.ownedUpgrades.includes('turbo_burner')) cookSpeedMod += 0.5; 
 
         const isFoodMoving = state.isTossing;
-        const burnMultiplier = isFoodMoving ? 0.02 : 0.6; 
+        // Burn multiplier: tossing = minimal burn; no toss = ramps up the longer since last toss (tossing regularly keeps it low)
+        let burnMultiplier;
+        if (isFoodMoving) {
+          burnMultiplier = 0.02;
+        } else {
+          const lastToss = state.lastTossTime || 0;
+          const timeSinceTossSec = lastToss ? (Date.now() - lastToss) / 1000 : 999;
+          if (timeSinceTossSec < 0.4) burnMultiplier = 0.04;
+          else if (timeSinceTossSec < 1.2) burnMultiplier = 0.04 + (timeSinceTossSec - 0.4) * 0.45;  // ramp to ~0.4
+          else if (timeSinceTossSec < 3) burnMultiplier = 0.4 + (timeSinceTossSec - 1.2) * 0.25;  // ramp to ~0.85
+          else burnMultiplier = 0.85;
+        }
         const cookMultiplier = isFoodMoving ? 1.5 : 0.5;
 
         // OIL MODIFIERS
         const isDry = state.oilLevel < 20;
         const isGreasy = state.oilLevel > 75;
         const oilCookMod = isGreasy ? 0.4 : 1.0; 
-        const oilBurnMod = isDry ? 3.0 : 1.0; 
+        // More oil at high heat = more burn (oil scorches). Scale with oil level; extra when very hot + greasy.
+        const oilBurnMod = isDry ? 3.0 : (1 + (state.oilLevel / 100) * 0.9 + (isGreasy && state.heatLevel > 80 ? 0.8 : 0)); 
         const oilResidueMod = isDry ? 3.0 : 0.5; 
 
         const complexity = state.wokContents.length;
@@ -810,7 +1040,10 @@ export default function App() {
                 setOilLevel(prev => Math.max(0, prev - 1.5)); 
             }
           }
-          newBurn += ((state.heatLevel - 65) * 0.002) * residueBurnMultiplier * burnMultiplier * burnResist * prepBuff.burn * diffMults.burn * oilBurnMod;
+          // Base burn rate; higher when very hot + greasy. Scale up with cook time at high heat (longer cooking = faster burn).
+          const burnBaseCoeff = (isGreasy && state.heatLevel > 80) ? 0.0042 : 0.002;
+          const cookDurationFactor = 1 + (state.cookProgress / 100) * 0.65; // longer at high heat = more burn
+          newBurn += ((state.heatLevel - 65) * burnBaseCoeff) * residueBurnMultiplier * burnMultiplier * burnResist * prepBuff.burn * diffMults.burn * oilBurnMod * cookDurationFactor;
           if (!state.isTossing) newWokHei = Math.max(0, newWokHei - 0.2); 
         } else {
            newWokHei = Math.max(0, newWokHei - 0.3); 
@@ -879,7 +1112,7 @@ export default function App() {
 
       const state = gameDataRef.current;
 
-      if (state.showGuide || state.showLeaderboard || state.showShop || state.showRecipes || gameState === 'STORY_CHAPTER' || gameState === 'PREP' || gameState === 'EPILOGUE') {
+      if (state.showGuide || state.showLeaderboard || state.showShop || state.showRecipes || gameState === 'STORY_CHAPTER' || gameState === 'PREP' || gameState === 'EPILOGUE' || gameState === 'NPC_ENCOUNTER') {
          return; 
       }
 
@@ -1937,6 +2170,38 @@ export default function App() {
       const unlockedReqs = new Set(RECIPES.filter(r => r.chapter <= currentChapter).flatMap(r => r.requires));
       return unlockedReqs.has(ingId) || ['garlic', 'ginger', 'salt', 'sugar', 'five_spice'].includes(ingId);
   };
+
+  const getWokUmami = () => {
+    if (wokContents.length === 0) return { total: 0, avg: 0 };
+    const total = wokContents.reduce((sum, id) => sum + (ALL_ITEMS[id]?.umami || 0), 0);
+    return { total, avg: parseFloat((total / wokContents.length).toFixed(1)) };
+  };
+
+  const saveCustomRecipe = () => {
+    if (!newRecipeName.trim() || wokContents.length === 0) return;
+    const freqMap = {};
+    wokContents.forEach(id => freqMap[id] = (freqMap[id] || 0) + 1);
+    const umami = getWokUmami();
+    const totalCost = wokContents.reduce((sum, id) => sum + (ALL_ITEMS[id]?.cost || 0), 0);
+    const recipe = {
+      id: `custom_${Date.now()}`,
+      name: newRecipeName.trim(),
+      ingredients: freqMap,
+      ingredientList: wokContents.slice(),
+      totalUmami: umami.total,
+      avgUmami: umami.avg,
+      totalCost,
+      timestamp: Date.now()
+    };
+    setCustomRecipes(prev => [...prev, recipe]);
+    setNewRecipeName('');
+    setShowSaveRecipe(false);
+    showNotification(`Recipe "${recipe.name}" saved!`, 'success');
+  };
+
+  const deleteCustomRecipe = (recipeId) => {
+    setCustomRecipes(prev => prev.filter(r => r.id !== recipeId));
+  };
   
   const getDynamicPrompt = () => {
      if (wokContents.length === 0) {
@@ -2023,11 +2288,13 @@ export default function App() {
     emptyWok();
     setOrders([]);
     setActivePrepBuff(null);
+    setNpcEncounter(null);
     setGameState('MENU');
   };
 
   const startGame = (mode) => {
     initAudio();
+    initAudioEngine(); // so GameLoop's playIngredientAdd (from audioEngine) works
     setIsStoryMode(mode === 'STORY');
     setScore(0);
     setCash(0);
@@ -2038,7 +2305,10 @@ export default function App() {
     setWokResidue(0);
     setOilLevel(20);
     setActivePrepBuff(null);
-    setScoreSubmitted(false); 
+    setScoreSubmitted(false);
+    setQuestLog({});
+    setNpcBuffs({});
+    setNpcEncounter(null);
     emptyWok();
     setOrders([]);
     
@@ -2051,14 +2321,63 @@ export default function App() {
     }
   };
 
-  const continueStory = () => {
-      initAudio();
-      startPrepPhase();
+  const getChapterEncounters = (chapter) => {
+      return SIDE_QUESTS.filter(quest => {
+          if (quest.chapter !== chapter) return false;
+          if (questLog[quest.id]) return false;
+          if (quest.requires) {
+              if (questLog[quest.requires.questId] !== quest.requires.choiceId) return false;
+          }
+          return true;
+      });
   };
 
-  const buyUpgrade = (upgrade) => {
-      if (cash >= upgrade.cost && !ownedUpgrades.includes(upgrade.id)) {
-          setCash(c => c - upgrade.cost);
+  const continueStory = () => {
+      initAudio();
+      initAudioEngine();
+      const encounters = getChapterEncounters(currentChapter);
+      if (encounters.length > 0) {
+          const [first, ...rest] = encounters;
+          setNpcEncounter({ ...first, phase: 'dialog', remaining: rest });
+          setGameState('NPC_ENCOUNTER');
+      } else {
+          startPrepPhase();
+      }
+  };
+
+  const handleEncounterChoice = (quest, choice) => {
+      setQuestLog(prev => ({ ...prev, [quest.id]: choice.id }));
+      const fx = choice.effects;
+      if (fx.cashBonus) {
+          setCash(c => c + fx.cashBonus);
+          showNotification(`+$${fx.cashBonus} cash!`, 'success');
+      }
+      if (fx.soulBonus) {
+          setSoul(s => s + fx.soulBonus);
+          triggerStreakPopup(`+${fx.soulBonus} SOUL`, '#22d3ee');
+      }
+      const { cashBonus, soulBonus, ...persistentBuffs } = fx;
+      if (Object.keys(persistentBuffs).length > 0) {
+          setNpcBuffs(prev => ({ ...prev, ...persistentBuffs }));
+      }
+      setNpcEncounter(prev => ({ ...prev, phase: 'response', responseText: choice.response, chosenDesc: choice.desc }));
+  };
+
+  const proceedFromEncounter = () => {
+      const remaining = npcEncounter?.remaining || [];
+      if (remaining.length > 0) {
+          const [next, ...rest] = remaining;
+          setNpcEncounter({ ...next, phase: 'dialog', remaining: rest });
+      } else {
+          setNpcEncounter(null);
+          startPrepPhase();
+      }
+  };
+
+  const buyUpgrade = (upgrade, effectiveCost) => {
+      const cost = effectiveCost !== undefined ? effectiveCost : upgrade.cost;
+      if (cash >= cost && !ownedUpgrades.includes(upgrade.id)) {
+          setCash(c => c - cost);
           setOwnedUpgrades(prev => [...prev, upgrade.id]);
           showNotification(`${upgrade.name} Acquired!`, "success");
       }
@@ -2125,9 +2444,9 @@ export default function App() {
       }
       playIngredientAdd(ingId);
       
-      let absorption = 5; 
-      if (['rice', 'noodle'].includes(ingId)) absorption = 25; 
-      if (['egg', 'beef', 'char_siu', 'shrimp'].includes(ingId)) absorption = 15; 
+      let absorption = 2;
+      if (['rice', 'noodle'].includes(ingId)) absorption = 10;
+      if (['egg', 'beef', 'char_siu', 'shrimp'].includes(ingId)) absorption = 6;
       setOilLevel(current => Math.max(0, current - absorption));
 
       return [...prev, ingId];
@@ -2142,6 +2461,7 @@ export default function App() {
     setCookProgress(0);
     setBurnProgress(0);
     setWokHei(0);
+    setOilLevel(0); // Oil exits with the food when serving, gifting, or trashing
   };
 
   const handleTrash = () => {
@@ -2185,10 +2505,11 @@ export default function App() {
 
     if (velocity > 0.08) {
         gameDataRef.current.tossTriggered = true;
+        gameDataRef.current.lastTossTime = Date.now();
         if (velocity > 0.15) { 
             playTossShhh();
-            // Significantly reduced heat penalty for tossing!
-            const coolAmount = gameDataRef.current.ownedUpgrades.includes('iron_palm') ? 1.5 : 0.5;
+            // Reduced heat penalty so repeated tossing doesn't drain heat too fast
+            const coolAmount = gameDataRef.current.ownedUpgrades.includes('iron_palm') ? 0.6 : 0.2;
             setHeatLevel(prev => Math.max(5, prev - coolAmount));
         }
     }
@@ -2257,7 +2578,7 @@ export default function App() {
         if (canFulfill) {
             if (!isDonation && order.requiresWokHei && wokHei < order.requiresWokHei) {
                 showNotification("Failed! VIP demanded 90% Wok Hei!", "error");
-                setReputation(r => Math.max(0, r - 1));
+                setReputation(r => Math.max(0, r - (npcBuffs.gooseProtection ? 0.5 : 1)));
                 setCombo(1);
                 gameDataRef.current.trashTriggered = true;
                 setOrders(prev => prev.filter((_, idx) => idx !== i));
@@ -2282,6 +2603,18 @@ export default function App() {
         let quality = "Good!";
         let isPerfect = cookProgress >= 95 && burnProgress < 20;
 
+        if (npcBuffs.sister13Active && !isDonation) {
+            if (isPerfect && wokHei > 85) {
+                setNpcBuffs(prev => ({ ...prev, sister13Active: false, revenueBonus: (prev.revenueBonus || 0) + 0.15 }));
+                triggerStreakPopup("GOLDEN CHOPSTICK! 🥢", "#ef4444");
+                showNotification("十三姨: 唔錯! +15% Revenue!", "success");
+            } else {
+                setNpcBuffs(prev => ({ ...prev, sister13Active: false }));
+                setReputation(r => Math.max(0, r - (npcBuffs.gooseProtection ? 0.5 : 1)));
+                showNotification("十三姨: 我就知。(I knew it.) -1 Star!", "error");
+            }
+        }
+
         let wokHeiMult = 1.0;
         if (wokHei > 80) { wokHeiMult = 1.5; quality = "WOK HEI MASTER!"; }
         if (isPerfect && wokHei <= 80) { quality = "Perfect!"; wokHeiMult = 1.2; }
@@ -2305,6 +2638,10 @@ export default function App() {
         });
         if (activeCombos.length > 0) quality = `${activeCombos.join(" + ")}!`;
 
+        const umamiData = getWokUmami();
+        const umamiMult = 1.0 + Math.min(umamiData.avg, 5) * 0.06;
+        if (umamiData.avg >= 3) quality = "Deep Umami! " + quality;
+
         const batchMultiplier = 1.0 + (batchSize - 1) * 0.4; 
         if (batchSize > 1) quality = `BULK x${batchSize}! ` + quality;
 
@@ -2312,13 +2649,23 @@ export default function App() {
         let speedTip = urgency * 5.0 * batchMultiplier * batchSize; 
 
         let baseRevenue = order.baseScore;
+        if (npcBuffs.sorrowfulBuff && order.id === 'char_siu_rice') baseRevenue *= 1.5;
         const prepMult = gameDataRef.current.activePrepBuff ? gameDataRef.current.activePrepBuff.cash : 1.0;
-        let finalRevenue = (baseRevenue * wokHeiMult * flavorMult * combo * prepMult * batchMultiplier * oilMult);
-        if (order.bonusCash) finalRevenue += order.bonusCash;
+        let finalRevenue = (baseRevenue * wokHeiMult * flavorMult * umamiMult * combo * prepMult * batchMultiplier * oilMult);
+        let eventBonus = order.bonusCash || 0;
+        if (npcBuffs.gooseAlly && order.specialEvent) eventBonus *= 1.5;
+        if (eventBonus > 0) finalRevenue += eventBonus;
 
         let cashMult = 1;
         if (gameDataRef.current.ownedUpgrades.includes('cursed_chili')) cashMult += 0.5;
         if (gameDataRef.current.ownedUpgrades.includes('msg_shaker')) cashMult += 0.25;
+        if (npcBuffs.revenueBonus) cashMult += npcBuffs.revenueBonus;
+        if (npcBuffs.soloFinale) cashMult += 0.3;
+        if (npcBuffs.sabotageActive && !npcBuffs.turkeyAlly) {
+            const penalty = npcBuffs.sabotageLevel === 'hard' ? 0.35 : 0.2;
+            cashMult -= npcBuffs.bullTongWeakened ? penalty * 0.5 : penalty;
+            if (npcBuffs.counterBonus) cashMult += 0.4;
+        }
         finalRevenue = (finalRevenue * cashMult) + speedTip;
 
         let profit = Number((finalRevenue - totalCost).toFixed(2));
@@ -2384,7 +2731,7 @@ export default function App() {
             setCombo(1); 
             emptyWok();  
         } else {
-            setReputation(r => Math.max(0, r - 1));
+            setReputation(r => Math.max(0, r - (npcBuffs.gooseProtection ? 0.5 : 1)));
             setCombo(1);
             gameDataRef.current.trashTriggered = true;
             emptyWok();
@@ -2429,6 +2776,7 @@ export default function App() {
 
   const finalTitle = getScoreTitle(score);
   const dynPrompt = getDynamicPrompt();
+  const wokUmami = getWokUmami();
 
   return (
     <div className="absolute inset-0 bg-neutral-950 text-white font-sans overflow-hidden flex flex-col user-select-none pb-8 md:pb-12">
@@ -2494,12 +2842,23 @@ export default function App() {
 
           <div className="flex gap-0.5 md:gap-1 hidden sm:flex ml-1 md:ml-2 border-l border-neutral-700 pl-2 md:pl-4">
             {[...Array(5)].map((_, i) => (
-              <svg key={i} className={`w-4 h-4 md:w-6 md:h-6 ${i < reputation ? 'text-yellow-400 drop-shadow-[0_0_5px_rgba(250,204,21,0.5)]' : 'text-neutral-800'}`} fill="currentColor" viewBox="0 0 20 20">
+              <svg key={i} className={`w-4 h-4 md:w-6 md:h-6 ${i < Math.round(reputation) ? 'text-yellow-400 drop-shadow-[0_0_5px_rgba(250,204,21,0.5)]' : 'text-neutral-800'}`} fill="currentColor" viewBox="0 0 20 20">
                 <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
               </svg>
             ))}
           </div>
         </div>
+
+        {npcBuffs.sister13Active && gameState === 'PLAYING' && (
+          <div className="absolute top-full left-1/2 -translate-x-1/2 bg-red-900/90 text-red-300 text-[9px] md:text-[11px] px-3 py-0.5 rounded-b-lg border border-red-700 border-t-0 font-bold tracking-widest z-30 whitespace-nowrap">
+            🥢 SISTER 13 IS WATCHING YOUR NEXT DISH
+          </div>
+        )}
+        {npcBuffs.sabotageActive && !npcBuffs.turkeyAlly && gameState === 'PLAYING' && (
+          <div className="absolute top-full right-2 bg-orange-900/90 text-orange-300 text-[9px] md:text-[11px] px-3 py-0.5 rounded-b-lg border border-orange-700 border-t-0 font-bold tracking-widest z-30 whitespace-nowrap">
+            🐂 SABOTAGE {npcBuffs.counterBonus ? '(COUNTER ACTIVE)' : 'ACTIVE'}
+          </div>
+        )}
       </header>
 
       {/* --- MENU STATE --- */}
@@ -2589,6 +2948,65 @@ export default function App() {
         </div>
       )}
 
+      {/* --- NPC ENCOUNTER --- */}
+      {gameState === 'NPC_ENCOUNTER' && npcEncounter && !showShop && !showRecipes && (
+        <div className="flex-1 flex items-center justify-center bg-neutral-950/95 absolute inset-0 z-50 p-4">
+          <div className={`text-center bg-neutral-900 p-6 md:p-12 rounded-3xl border-2 ${NPC_CHARACTERS[npcEncounter.npc].border} max-w-2xl w-full shadow-2xl relative overflow-hidden`}>
+            <div className={`absolute inset-0 bg-gradient-to-b ${NPC_CHARACTERS[npcEncounter.npc].bg} to-transparent opacity-30 pointer-events-none`} />
+            
+            <div className="relative z-10">
+              <div className="text-6xl md:text-7xl mb-4 drop-shadow-[0_10px_20px_rgba(0,0,0,0.8)]">{String(NPC_CHARACTERS[npcEncounter.npc].icon)}</div>
+              <h3 className={`text-sm md:text-base font-bold uppercase tracking-[0.3em] ${NPC_CHARACTERS[npcEncounter.npc].color} mb-1`}>
+                {String(NPC_CHARACTERS[npcEncounter.npc].name)} <span className="opacity-60">{String(NPC_CHARACTERS[npcEncounter.npc].chName)}</span>
+              </h3>
+              <h2 className="text-2xl md:text-4xl font-black mb-6 text-white leading-tight">{String(npcEncounter.title)}</h2>
+              
+              {npcEncounter.phase === 'dialog' ? (
+                <>
+                  <div className="space-y-3 mb-8 text-left bg-black/40 p-5 md:p-6 rounded-xl border border-neutral-800">
+                    {npcEncounter.dialog.map((line, i) => (
+                      <p key={i} className={i === 0 ? 'text-yellow-300 italic font-bold text-base md:text-lg' : i === 1 ? 'text-neutral-500 text-sm italic' : 'text-neutral-300 text-sm md:text-base leading-relaxed'}>
+                        {String(line)}
+                      </p>
+                    ))}
+                  </div>
+                  <div className="space-y-3">
+                    {npcEncounter.choices.map(choice => {
+                      const locked = choice.requiresSoul && soul < choice.requiresSoul;
+                      return (
+                        <button 
+                          key={choice.id}
+                          onClick={() => handleEncounterChoice(npcEncounter, choice)}
+                          disabled={locked}
+                          className={`w-full p-4 rounded-xl border-2 text-left transition-all ${locked ? 'border-neutral-800 bg-neutral-900 opacity-40 cursor-not-allowed' : 'border-neutral-700 bg-neutral-800 hover:bg-neutral-700 hover:border-neutral-500 active:scale-[0.98]'}`}
+                        >
+                          <div className="font-bold text-white text-sm md:text-lg mb-1">{String(choice.label)}</div>
+                          <div className="text-xs text-neutral-400 leading-relaxed">{String(choice.desc)}</div>
+                          {locked && <div className="text-xs text-cyan-400 mt-1 flex items-center gap-1"><Heart size={10} fill="currentColor" /> Requires {choice.requiresSoul} Soul (you have {soul})</div>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="bg-black/40 p-6 rounded-xl border border-neutral-800 mb-6">
+                    <p className="text-yellow-300 italic font-bold text-lg md:text-xl mb-4">{String(npcEncounter.responseText)}</p>
+                    <div className="text-sm text-green-400 bg-green-900/20 rounded-lg px-4 py-2 border border-green-800/50 inline-block">{String(npcEncounter.chosenDesc)}</div>
+                  </div>
+                  <button
+                    onClick={proceedFromEncounter}
+                    className="w-full py-4 bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-500 hover:to-red-500 rounded-xl font-bold text-lg uppercase tracking-widest text-white transition-transform active:scale-95 shadow-lg"
+                  >
+                    Continue
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* --- PREP MINIGAME --- */}
       {gameState === 'PREP' && !showShop && !showRecipes && (
         <div className="flex-1 flex flex-col items-center justify-center bg-[#2c1e16] absolute inset-0 z-50 p-4 bg-[radial-gradient(circle_at_center,_var(--tw-gradient-stops))] from-[#4a3221] to-[#1a120c]">
@@ -2655,7 +3073,8 @@ export default function App() {
             <div className="overflow-y-auto custom-scrollbar flex-1 grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4 text-left px-2 pb-4">
                {UPGRADES.map(u => {
                   const isOwned = ownedUpgrades.includes(u.id);
-                  const canAfford = cash >= u.cost;
+                  const effectiveCost = (u.id === 'monk_spoon' && npcBuffs.masterPath === 'middle') ? u.cost * 0.5 : u.cost;
+                  const canAfford = cash >= effectiveCost;
                   return (
                   <div key={u.id} className={`p-4 rounded-xl border-2 flex flex-col justify-between ${isOwned ? 'bg-green-900/20 border-green-700' : 'bg-neutral-800 border-neutral-700'}`}>
                      <div className="flex items-start gap-3 mb-4">
@@ -2666,11 +3085,11 @@ export default function App() {
                         </div>
                      </div>
                      <button 
-                        onClick={() => buyUpgrade(u)}
+                        onClick={() => buyUpgrade(u, effectiveCost)}
                         disabled={isOwned || !canAfford}
                         className={`w-full py-2.5 rounded-lg font-bold uppercase tracking-widest text-sm transition-transform ${isOwned ? 'bg-green-800/50 text-green-300 border border-green-700 cursor-not-allowed' : canAfford ? 'bg-yellow-600 hover:bg-yellow-50 text-neutral-950 active:scale-95' : 'bg-neutral-700 text-neutral-500 cursor-not-allowed'}`}
                      >
-                        {isOwned ? 'Owned' : `Buy ($${u.cost.toFixed(2)})`}
+                        {isOwned ? 'Owned' : `Buy ($${effectiveCost.toFixed(2)})${effectiveCost < u.cost ? ' ☯️' : ''}`}
                      </button>
                   </div>
                )})}
@@ -2700,7 +3119,13 @@ export default function App() {
                         <span className="text-2xl drop-shadow-md">{String(item.icon)}</span>
                         <span className="text-xs font-bold text-neutral-300 leading-tight">{String(item.name)}</span>
                       </div>
-                      <span className="text-red-400 font-mono text-sm font-bold">-${item.cost.toFixed(2)}</span>
+                      <div className="flex flex-col items-end gap-0.5">
+                        <span className="text-red-400 font-mono text-sm font-bold">-${item.cost.toFixed(2)}</span>
+                        <div className="flex items-center gap-1.5">
+                          <span className={`text-[10px] font-bold ${item.umami >= 4 ? 'text-amber-300' : item.umami >= 2 ? 'text-amber-500' : 'text-neutral-600'}`}>旨{item.umami}</span>
+                          <span className={`text-[10px] font-bold ${item.oiliness >= 4 ? 'text-yellow-300' : item.oiliness >= 2 ? 'text-yellow-600' : 'text-neutral-600'}`}>🫒{item.oiliness}</span>
+                        </div>
+                      </div>
                     </div>
                   ))}
                 </div>
@@ -2718,6 +3143,8 @@ export default function App() {
                         <th className="p-3 text-right">Cost</th>
                         <th className="p-3 text-right">Base Price</th>
                         <th className="p-3 text-right">Base Profit</th>
+                        <th className="p-3 text-right">旨味</th>
+                        <th className="p-3 text-right">🫒 Oil</th>
                       </tr>
                     </thead>
                     <tbody className="text-sm">
@@ -2739,13 +3166,66 @@ export default function App() {
                             <td className="p-3 text-right font-mono text-red-400 font-bold">-${cost.toFixed(2)}</td>
                             <td className="p-3 text-right font-mono text-green-400 font-bold">${recipe.baseScore.toFixed(2)}</td>
                             <td className="p-3 text-right font-mono text-yellow-400 font-bold">${profit.toFixed(2)}</td>
+                            <td className={`p-3 text-right font-mono font-bold ${(recipe.requires.reduce((sum, req) => sum + (ALL_ITEMS[req].umami || 0), 0) / recipe.requires.length) >= 3 ? 'text-amber-300' : 'text-amber-500'}`}>
+                              {(recipe.requires.reduce((sum, req) => sum + (ALL_ITEMS[req].umami || 0), 0) / recipe.requires.length).toFixed(1)}
+                            </td>
+                            <td className={`p-3 text-right font-mono font-bold ${recipe.idealOil >= 50 ? 'text-yellow-300' : recipe.idealOil >= 40 ? 'text-yellow-500' : 'text-green-500'}`}>
+                              {recipe.idealOil}%
+                            </td>
                           </tr>
                         );
                       })}
                     </tbody>
                   </table>
                 </div>
-                <p className="text-xs text-neutral-500 mt-3 italic">* Note: Final profit varies greatly based on Wok Hei multiplier, speed tips, and hidden flavor combos!</p>
+                <p className="text-xs text-neutral-500 mt-3 italic">* Note: Final profit varies greatly based on Wok Hei, Umami depth, speed tips, and hidden flavor combos!</p>
+              </div>
+
+              {/* My Recipes */}
+              <div>
+                <h3 className="text-xl font-bold text-amber-400 mb-3 border-b border-neutral-700 pb-2 flex items-center justify-between">
+                  <span>My Recipes ({customRecipes.length})</span>
+                </h3>
+                {customRecipes.length === 0 ? (
+                  <div className="text-neutral-500 text-sm italic py-6 text-center bg-neutral-800/30 rounded-xl border border-dashed border-neutral-700">
+                    No saved recipes yet. Cook a dish and hit SAVE to remember it!
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {customRecipes.map(recipe => (
+                      <div key={recipe.id} className="bg-neutral-800 rounded-xl p-4 border border-neutral-700 relative group">
+                        <button onClick={() => deleteCustomRecipe(recipe.id)} className="absolute top-3 right-3 text-neutral-600 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100" title="Delete recipe">
+                          <Trash2 size={16} />
+                        </button>
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="font-bold text-white text-lg">{String(recipe.name)}</div>
+                          <div className="flex items-center gap-3 text-xs">
+                            <span className={`font-bold ${recipe.avgUmami >= 3 ? 'text-amber-300' : 'text-amber-500'}`}>旨味 {recipe.avgUmami.toFixed(1)}</span>
+                            <span className="text-red-400 font-mono">-${recipe.totalCost.toFixed(2)}</span>
+                            {recipe.markup && (
+                              <span className={`font-bold ${recipe.markup > 3 ? 'text-red-400' : recipe.markup > 2.5 ? 'text-yellow-400' : 'text-green-400'}`}>
+                                {recipe.markup.toFixed(1)}x
+                              </span>
+                            )}
+                            {recipe.sellingPrice && (
+                              <span className="text-green-400 font-mono font-bold">${recipe.sellingPrice.toFixed(2)}</span>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {Object.entries(recipe.ingredients).map(([id, count]) => (
+                            <span key={id} className="bg-black/30 px-2 py-1 rounded-md text-sm flex items-center gap-1">
+                              {String(ALL_ITEMS[id]?.icon || '?')} 
+                              <span className="text-xs text-neutral-400">{String(ALL_ITEMS[id]?.name || id)}</span>
+                              {count > 1 && <span className="text-xs text-neutral-500">x{count}</span>}
+                            </span>
+                          ))}
+                        </div>
+                        <div className="text-[10px] text-neutral-600 mt-2">{new Date(recipe.timestamp).toLocaleDateString()}</div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
             
@@ -2781,6 +3261,14 @@ export default function App() {
               <div>
                 <h3 className="text-lg font-bold text-white mb-1">5. Economy & Soul</h3>
                 <p>Ingredients cost money, and spilling food out of the pan deducts cash instantly! Discover hidden <span className="text-yellow-400 font-bold">Flavor Combos</span> (e.g., Mushroom + Oyster Sauce + MSG) for huge bonuses. Or, hit <span className="text-cyan-400 font-bold">GIFT</span> to sacrifice your cash profit in exchange for rare Soul Points.</p>
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-white mb-1">6. Umami & Custom Recipes</h3>
+                <p>Every ingredient has an <span className="text-amber-400 font-bold">Umami (旨味)</span> rating from 0-5. Dishes with higher average umami earn up to <span className="text-amber-300 font-bold">+30% bonus revenue</span>! Stack MSG, soy sauce, oyster sauce, and shiitake for maximum depth. Hit <span className="text-amber-400 font-bold">SAVE</span> while cooking to name and save your own recipes to the Ledger for future reference.</p>
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-white mb-1">7. Oiliness & Ideal Oil</h3>
+                <p>Each recipe has an <span className="text-yellow-400 font-bold">Ideal Oil</span> level shown on its ticket (🫒). Ingredients also have an <span className="text-yellow-400 font-bold">oiliness</span> rating that shifts the effective oil level. Match the ideal and get <span className="text-green-400 font-bold">Perfect Oil!</span> for a 1.25x bonus + tip. Go way over and customers will complain — <span className="text-red-400 font-bold">Too Greasy!</span> cuts your revenue and risks a reputation star.</p>
               </div>
             </div>
             <button onClick={() => setShowGuide(false)} className="mt-6 w-full py-3 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-bold uppercase tracking-widest text-white transition-transform active:scale-95">
@@ -2875,6 +3363,57 @@ export default function App() {
         </div>
       )}
 
+      {/* --- SAVE RECIPE OVERLAY --- */}
+      {showSaveRecipe && (
+        <div className="absolute inset-0 z-[100] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm">
+          <div className="bg-neutral-900 border border-amber-700 p-6 rounded-2xl max-w-sm w-full shadow-2xl relative">
+            <button onClick={() => setShowSaveRecipe(false)} className="absolute top-4 right-4 text-neutral-400 hover:text-white">✕</button>
+            <h2 className="text-2xl font-black mb-4 text-amber-400 flex items-center justify-center gap-2"><BookOpen /> Save Recipe</h2>
+            
+            <div className="mb-4 bg-black/40 p-3 rounded-xl border border-neutral-800">
+              <div className="text-xs text-neutral-400 uppercase tracking-widest mb-2">Ingredients in Wok</div>
+              <div className="flex flex-wrap gap-1">
+                {[...new Set(wokContents)].map(id => {
+                  const count = wokContents.filter(x => x === id).length;
+                  return (
+                    <span key={id} className="bg-neutral-800 px-2 py-1 rounded-md text-sm flex items-center gap-1">
+                      {String(ALL_ITEMS[id].icon)} {count > 1 && <span className="text-xs text-neutral-400">x{count}</span>}
+                    </span>
+                  );
+                })}
+              </div>
+              <div className="flex justify-between mt-3 text-xs">
+                <span className="text-amber-400 font-bold">旨味 Umami: {wokUmami.avg.toFixed(1)}</span>
+                <span className="text-red-400 font-mono">Cost: ${wokContents.reduce((s, id) => s + (ALL_ITEMS[id]?.cost || 0), 0).toFixed(2)}</span>
+              </div>
+            </div>
+            
+            <div className="flex flex-col gap-2 mb-4">
+              <label className="text-xs font-bold text-amber-500 uppercase tracking-widest ml-1">Recipe Name</label>
+              <input 
+                type="text" 
+                placeholder="Name your creation..." 
+                value={newRecipeName} 
+                onChange={e => setNewRecipeName(e.target.value)} 
+                maxLength={30} 
+                className="w-full p-3 rounded-lg bg-neutral-950 text-white border border-neutral-600 outline-none font-bold focus:border-amber-500 transition-colors" 
+                autoFocus
+                onKeyDown={e => { if (e.key === 'Enter') saveCustomRecipe(); }}
+              />
+            </div>
+            
+            <div className="flex gap-2">
+              <button onClick={() => setShowSaveRecipe(false)} className="flex-1 py-3 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-bold uppercase tracking-widest text-white transition-transform active:scale-95">
+                Cancel
+              </button>
+              <button onClick={saveCustomRecipe} disabled={!newRecipeName.trim()} className="flex-1 py-3 bg-amber-600 hover:bg-amber-500 disabled:bg-neutral-700 disabled:text-neutral-500 text-neutral-950 rounded-xl font-bold uppercase tracking-widest transition-all active:scale-95">
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* --- GAME OVER STATE --- */}
       {gameState === 'GAMEOVER' && !showGuide && !showLeaderboard && !showShop && !showRecipes && (
         <div className="flex-1 flex items-center justify-center bg-neutral-950/95 absolute inset-0 z-50">
@@ -2927,6 +3466,10 @@ export default function App() {
 
       {/* --- MAIN GAMEPLAY UI --- */}
       <main className="flex-1 flex flex-col relative min-h-0" style={{ backgroundColor: '#0a0a0a' }}>
+        {gameState === 'PLAYING' ? (
+          <GameLoop currentChapter={currentChapter} score={score} cash={cash} onRecipeSaved={(recipe) => setCustomRecipes(prev => [...prev, recipe])} isSandbox={!isStoryMode} />
+        ) : (
+          <>
         <div className="absolute top-1/4 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-50 pointer-events-none flex flex-col items-center gap-2">
           {notifications.map(n => (
             <div key={n.id} className={`px-4 py-2 rounded-full font-bold text-lg animate-bounce shadow-xl ${n.type === 'error' ? 'bg-red-600 text-white' : n.type === 'success' ? 'bg-green-500 text-neutral-900' : 'bg-neutral-700 text-white'}`}>
@@ -3042,7 +3585,7 @@ export default function App() {
           </div>
 
           <div className="flex-1 h-full min-h-0 min-w-0 flex flex-col items-center justify-center relative mx-1 md:mx-2">
-            <div className="absolute top-0 w-full flex justify-between px-2 md:px-8 z-20 pointer-events-none transition-opacity duration-300" style={{ opacity: wokContents.length > 0 ? 1 : 0}}>
+            <div className="absolute top-0 w-full flex justify-between items-start px-2 md:px-8 z-20 pointer-events-none transition-opacity duration-300" style={{ opacity: wokContents.length > 0 ? 1 : 0}}>
               <div className={`w-20 md:w-40 bg-black/60 rounded-lg border border-neutral-800 backdrop-blur-md ${viewport.isLandscape ? 'p-1.5 md:p-2' : 'p-2 md:p-3'}`}>
                 <div className="flex justify-between text-[8px] md:text-xs mb-0.5 md:mb-1 font-bold uppercase tracking-wider text-neutral-400">
                   <span>Cook</span>
@@ -3050,6 +3593,13 @@ export default function App() {
                 </div>
                 <div className="h-1 md:h-2 bg-neutral-900 rounded-full overflow-hidden">
                   <div className="h-full bg-green-500 transition-all duration-100" style={{ width: `${cookProgress}%` }} />
+                </div>
+              </div>
+
+              <div className={`bg-black/60 rounded-lg border backdrop-blur-md flex flex-col items-center ${wokUmami.avg >= 3 ? 'border-amber-700/60' : 'border-neutral-800'} ${viewport.isLandscape ? 'p-1 md:p-1.5' : 'p-1.5 md:p-2'}`}>
+                <div className="text-[7px] md:text-[10px] font-black uppercase tracking-wider text-amber-500">旨味</div>
+                <div className={`text-sm md:text-lg font-mono font-black ${wokUmami.avg >= 3 ? 'text-amber-300' : wokUmami.avg >= 2 ? 'text-amber-400' : 'text-neutral-500'}`}>
+                  {wokUmami.avg.toFixed(1)}
                 </div>
               </div>
 
@@ -3135,6 +3685,12 @@ export default function App() {
                 </button>
             </div>
 
+            {wokContents.length > 0 && (
+              <button onClick={() => { setNewRecipeName(''); setShowSaveRecipe(true); }} className={`w-full shrink-0 bg-amber-900/80 hover:bg-amber-800 border-amber-950 border-b-2 active:border-b-0 active:translate-y-0.5 rounded-xl font-bold text-amber-200 flex items-center justify-center gap-1 transition-all shadow-lg text-[8px] md:text-[10px] tracking-wider ${viewport.isLandscape ? 'h-8' : 'h-9 md:h-10'}`}>
+                <BookOpen className="w-3 h-3 md:w-4 md:h-4" /> SAVE
+              </button>
+            )}
+
           </div>
         </div>
 
@@ -3154,6 +3710,7 @@ export default function App() {
                         key={item.id} 
                         onClick={() => addIngredient(item.id)} 
                         disabled={!isUnlocked(item.id) || wokContents.length >= 25 || burnProgress >= 100} 
+                        title={`${item.name} $${item.cost.toFixed(2)} | Umami ${item.umami}/5`}
                         className={`rounded-lg flex flex-col items-center justify-center transition-all ${item.color} ${item.text || 'text-neutral-900'} border-b-2 md:border-b-4 border-black/30 shadow-md ${viewport.isLandscape ? 'w-[32px] md:w-[48px] h-8 md:h-12' : 'w-[40px] md:w-[56px] h-10 md:h-14'} ${!isUnlocked(item.id) ? 'opacity-20 grayscale' : 'disabled:opacity-30 disabled:grayscale hover:brightness-110 active:border-b-0 active:translate-y-1'}`}
                       >
                         <span className={`${viewport.isLandscape ? 'text-lg md:text-2xl' : 'text-xl md:text-3xl'} leading-none filter drop-shadow-sm`}>
@@ -3167,6 +3724,8 @@ export default function App() {
             ))}
           </div>
         </div>
+          </>
+        )}
       </main>
     </div>
   );

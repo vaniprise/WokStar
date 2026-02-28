@@ -19,25 +19,30 @@ export const getScoreTitle = (score) => {
 
 // --- Economic Engine (Prices scaled to cents) ---
 export const INGREDIENTS = {
-  RICE: { id: 'rice', name: 'Day-Old Rice', color: 'bg-yellow-50', icon: '🍚', cost: 1.50, rarity: 1 },
-  EGG: { id: 'egg', name: 'Beaten Egg', color: 'bg-yellow-400', icon: '🥚', cost: 1.80, rarity: 1 },
-  SCALLION: { id: 'scallion', name: 'Scallions', color: 'bg-green-500', icon: '🌿', cost: 0.70, rarity: 1 },
-  BEEF: { id: 'beef', name: 'Velvet Beef', color: 'bg-red-800', icon: '🥩', cost: 11.50, rarity: 3 },
-  CHAR_SIU: { id: 'char_siu', name: 'Char Siu', color: 'bg-red-900', icon: '🍖', text: 'text-white', cost: 85.00, rarity: 4 }, // Exotic!
-  NOODLE: { id: 'noodle', name: 'Ho Fun', color: 'bg-orange-100', icon: '🍜', cost: 2.20, rarity: 1 },
-  SHRIMP: { id: 'shrimp', name: 'Fresh Prawn', color: 'bg-pink-200', icon: '🦐', cost: 25.00, rarity: 3 },
-  GAI_LAN: { id: 'gai_lan', name: 'Gai Lan', color: 'bg-emerald-600', icon: '🥬', text: 'text-white', cost: 3.50, rarity: 2 },
-  MUSHROOM: { id: 'mushroom', name: 'Shiitake', color: 'bg-stone-700', icon: '🍄', text: 'text-white', cost: 9.50, rarity: 2 },
-  CHILI: { id: 'chili', name: 'Birdseye Chili', color: 'bg-red-600', icon: '🌶️', text: 'text-white', cost: 1.20, rarity: 2 },
+  RICE: { id: 'rice', name: 'Day-Old Rice', color: 'bg-yellow-50', icon: '🍚', cost: 1.50, rarity: 1, umami: 1, oiliness: 0 },
+  EGG: { id: 'egg', name: 'Beaten Egg', color: 'bg-yellow-400', icon: '🥚', cost: 1.80, rarity: 1, umami: 2, oiliness: 2 },
+  SCALLION: { id: 'scallion', name: 'Scallions', color: 'bg-green-500', icon: '🌿', cost: 0.70, rarity: 1, umami: 1, oiliness: 0 },
+  BEEF: { id: 'beef', name: 'Velvet Beef', color: 'bg-red-800', icon: '🥩', cost: 11.50, rarity: 3, umami: 3, oiliness: 3 },
+  CHAR_SIU: { id: 'char_siu', name: 'Char Siu', color: 'bg-red-900', icon: '🍖', text: 'text-white', cost: 85.00, rarity: 4, umami: 3, oiliness: 4 },
+  NOODLE: { id: 'noodle', name: 'Ho Fun', color: 'bg-orange-100', icon: '🍜', cost: 2.20, rarity: 1, umami: 1, oiliness: 1 },
+  SHRIMP: { id: 'shrimp', name: 'Fresh Prawn', color: 'bg-pink-200', icon: '🦐', cost: 25.00, rarity: 3, umami: 3, oiliness: 1 },
+  GAI_LAN: { id: 'gai_lan', name: 'Gai Lan', color: 'bg-emerald-600', icon: '🥬', text: 'text-white', cost: 3.50, rarity: 2, umami: 1, oiliness: 0 },
+  MUSHROOM: { id: 'mushroom', name: 'Shiitake', color: 'bg-stone-700', icon: '🍄', text: 'text-white', cost: 9.50, rarity: 2, umami: 4, oiliness: 1 },
+  CHILI: { id: 'chili', name: 'Birdseye Chili', color: 'bg-red-600', icon: '🌶️', text: 'text-white', cost: 1.20, rarity: 2, umami: 1, oiliness: 0 },
+  GARLIC: { id: 'garlic', name: 'Garlic', color: 'bg-amber-100', icon: '🧄', cost: 0.40, rarity: 1, umami: 2, oiliness: 1 },
+  GINGER: { id: 'ginger', name: 'Ginger', color: 'bg-yellow-200', icon: '🫚', cost: 0.60, rarity: 1, umami: 1, oiliness: 0 },
 };
 
 export const CONDIMENTS = {
-  SOY_SAUCE: { id: 'soy_sauce', name: 'Soy Sauce', color: 'bg-stone-800', icon: '🫖', text: 'text-stone-200', cost: 0.50, rarity: 1 },
-  OYSTER_SAUCE: { id: 'oyster_sauce', name: 'Oyster Sauce', color: 'bg-amber-900', icon: '🫙', text: 'text-amber-200', cost: 1.80, rarity: 2 },
-  XO_SAUCE: { id: 'xo_sauce', name: 'XO Sauce', color: 'bg-orange-800', icon: '🥫', text: 'text-orange-100', cost: 45.00, rarity: 4 }, // Exotic!
-  WINE: { id: 'wine', name: 'Shaoxing Wine', color: 'bg-amber-700', icon: '🍶', text: 'text-amber-100', cost: 2.50, rarity: 2 },
-  MSG: { id: 'msg', name: 'M.S.G.', color: 'bg-slate-200', icon: '✨', text: 'text-slate-800', cost: 0.80, rarity: 1 },
-  WHITE_PEPPER: { id: 'white_pepper', name: 'White Pepper', color: 'bg-stone-200', icon: '🧂', text: 'text-stone-800', cost: 1.20, rarity: 1 }
+  SOY_SAUCE: { id: 'soy_sauce', name: 'Soy Sauce', color: 'bg-stone-800', icon: '🫖', text: 'text-stone-200', cost: 0.50, rarity: 1, umami: 4, oiliness: 0 },
+  OYSTER_SAUCE: { id: 'oyster_sauce', name: 'Oyster Sauce', color: 'bg-amber-900', icon: '🫙', text: 'text-amber-200', cost: 1.80, rarity: 2, umami: 4, oiliness: 1 },
+  XO_SAUCE: { id: 'xo_sauce', name: 'XO Sauce', color: 'bg-orange-800', icon: '🥫', text: 'text-orange-100', cost: 45.00, rarity: 4, umami: 5, oiliness: 4 },
+  WINE: { id: 'wine', name: 'Shaoxing Wine', color: 'bg-amber-700', icon: '🍶', text: 'text-amber-100', cost: 2.50, rarity: 2, umami: 1, oiliness: 0 },
+  MSG: { id: 'msg', name: 'M.S.G.', color: 'bg-slate-200', icon: '✨', text: 'text-slate-800', cost: 0.80, rarity: 1, umami: 5, oiliness: 0 },
+  WHITE_PEPPER: { id: 'white_pepper', name: 'White Pepper', color: 'bg-stone-200', icon: '🧂', text: 'text-stone-800', cost: 1.20, rarity: 1, umami: 1, oiliness: 0 },
+  FIVE_SPICE: { id: 'five_spice', name: 'Five Spice', color: 'bg-amber-900', icon: '🌰', text: 'text-amber-100', cost: 1.50, rarity: 2, umami: 1, oiliness: 0 },
+  SALT: { id: 'salt', name: 'Salt', color: 'bg-gray-100', icon: '🧂', text: 'text-gray-800', cost: 0.10, rarity: 1, umami: 2, oiliness: 0 },
+  SUGAR: { id: 'sugar', name: 'Sugar', color: 'bg-sky-50', icon: '🧊', text: 'text-sky-900', cost: 0.20, rarity: 1, umami: 0, oiliness: 0 },
 };
 
 export const ALL_ITEMS = { ...INGREDIENTS, ...CONDIMENTS };
@@ -52,14 +57,14 @@ export const FLAVOR_COMBOS = [
 
 // Target 25-30% margins on Base Scores
 export const RECIPES = [
-  { id: 'spicy_beef_rice', chapter: 0, dishType: 'bowl', displayIcons: ['🍚', '🌶️'], name: 'Spicy Beef Fried Rice', requires: ['beef', 'rice', 'egg', 'chili', 'soy_sauce'], baseScore: 22.00, timeLimit: 55 },
-  { id: 'beef_chow_fun', chapter: 1, dishType: 'plate', displayIcons: ['🍜', '🥩'], name: 'Beef Chow Fun', requires: ['beef', 'noodle', 'scallion', 'soy_sauce', 'oyster_sauce'], baseScore: 22.50, timeLimit: 50 },
-  { id: 'braised_shiitake', chapter: 1, dishType: 'plate', displayIcons: ['🍄', '🥬'], name: 'Braised Shiitake', requires: ['mushroom', 'gai_lan', 'oyster_sauce', 'wine'], baseScore: 23.50, timeLimit: 48 },
-  { id: 'beef_gailan', chapter: 2, dishType: 'plate', displayIcons: ['🥩', '🥬'], name: 'Beef & Gai Lan', requires: ['beef', 'gai_lan', 'oyster_sauce', 'wine'], baseScore: 26.00, timeLimit: 50 },
-  { id: 'fried_rice', chapter: 2, dishType: 'bowl', displayIcons: ['🍚', '🦐'], name: 'Yangzhou Fried Rice', requires: ['egg', 'rice', 'scallion', 'shrimp', 'msg'], baseScore: 40.00, timeLimit: 60 },
-  { id: 'drunken_shrimp_noodle', chapter: 3, dishType: 'bowl', displayIcons: ['🍜', '🦐'], name: 'Drunken Shrimp Noodle', requires: ['shrimp', 'noodle', 'scallion', 'wine', 'white_pepper'], baseScore: 42.50, timeLimit: 45 },
-  { id: 'xo_seafood_noodle', chapter: 4, dishType: 'plate', displayIcons: ['🍜', '🦐'], name: 'XO Seafood Noodles', requires: ['shrimp', 'noodle', 'scallion', 'xo_sauce'], baseScore: 98.00, timeLimit: 45 },
-  { id: 'char_siu_rice', chapter: 4, dishType: 'bowl', displayIcons: ['🍚', '🍖'], name: 'Sorrowful Rice (Char Siu)', requires: ['char_siu', 'rice', 'egg', 'scallion', 'soy_sauce'], baseScore: 120.00, timeLimit: 40 },
+  { id: 'spicy_beef_rice', chapter: 0, dishType: 'bowl', displayIcons: ['🍚', '🌶️'], name: 'Spicy Beef Fried Rice', requires: ['beef', 'rice', 'egg', 'chili', 'soy_sauce'], baseScore: 22.00, timeLimit: 55, idealOil: 35 },
+  { id: 'beef_chow_fun', chapter: 1, dishType: 'plate', displayIcons: ['🍜', '🥩'], name: 'Beef Chow Fun', requires: ['beef', 'noodle', 'scallion', 'soy_sauce', 'oyster_sauce'], baseScore: 22.50, timeLimit: 50, idealOil: 50 },
+  { id: 'braised_shiitake', chapter: 1, dishType: 'plate', displayIcons: ['🍄', '🥬'], name: 'Braised Shiitake', requires: ['mushroom', 'gai_lan', 'oyster_sauce', 'wine'], baseScore: 23.50, timeLimit: 48, idealOil: 30 },
+  { id: 'beef_gailan', chapter: 2, dishType: 'plate', displayIcons: ['🥩', '🥬'], name: 'Beef & Gai Lan', requires: ['beef', 'gai_lan', 'oyster_sauce', 'wine'], baseScore: 26.00, timeLimit: 50, idealOil: 45 },
+  { id: 'fried_rice', chapter: 2, dishType: 'bowl', displayIcons: ['🍚', '🦐'], name: 'Yangzhou Fried Rice', requires: ['egg', 'rice', 'scallion', 'shrimp', 'msg'], baseScore: 40.00, timeLimit: 60, idealOil: 35 },
+  { id: 'drunken_shrimp_noodle', chapter: 3, dishType: 'bowl', displayIcons: ['🍜', '🦐'], name: 'Drunken Shrimp Noodle', requires: ['shrimp', 'noodle', 'scallion', 'wine', 'white_pepper'], baseScore: 42.50, timeLimit: 45, idealOil: 40 },
+  { id: 'xo_seafood_noodle', chapter: 4, dishType: 'plate', displayIcons: ['🍜', '🦐'], name: 'XO Seafood Noodles', requires: ['shrimp', 'noodle', 'scallion', 'xo_sauce'], baseScore: 98.00, timeLimit: 45, idealOil: 55 },
+  { id: 'char_siu_rice', chapter: 4, dishType: 'bowl', displayIcons: ['🍚', '🍖'], name: 'Sorrowful Rice (Char Siu)', requires: ['char_siu', 'rice', 'egg', 'scallion', 'soy_sauce'], baseScore: 120.00, timeLimit: 40, idealOil: 40 },
 ];
 
 export const SPECIAL_EVENTS = [
