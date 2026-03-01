@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" data-hitbox-shape="box" data-hitbox-width="24" data-hitbox-height="44" data-viewbox-half="32">
+  <defs>
+    <linearGradient id="oyster-bottle" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#6d4c41"/>
+      <stop offset="50%" stop-color="#4e342e"/>
+      <stop offset="100%" stop-color="#3e2723"/>
+    </linearGradient>
+    <linearGradient id="oyster-liquid" x1="0" y1="1" x2="0" y2="0">
+      <stop offset="0%" stop-color="#3e2723"/>
+      <stop offset="100%" stop-color="#795548"/>
+    </linearGradient>
+    <filter id="oyster-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="1" dy="2" stdDeviation="1" flood-color="#2c1810" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+  <path d="M26 6 L26 10 L20 50 L44 50 L38 10 L38 6 Z" fill="url(#oyster-bottle)" filter="url(#oyster-shadow)"/>
+  <rect x="24" y="18" width="16" height="30" rx="2" fill="url(#oyster-liquid)" opacity="0.85"/>
+  <ellipse cx="32" cy="16" rx="4" ry="2" fill="#5d4037"/>
+</svg>

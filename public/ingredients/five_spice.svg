@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" data-hitbox-shape="ellipse" data-hitbox-rx="26" data-hitbox-ry="26" data-viewbox-half="32">
+  <defs>
+    <radialGradient id="fivespice-base" cx="0.4" cy="0.4" r="0.65">
+      <stop offset="0%" stop-color="#d7ccc8"/>
+      <stop offset="50%" stop-color="#8d6e63"/>
+      <stop offset="100%" stop-color="#5d4037"/>
+    </radialGradient>
+    <filter id="fivespice-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="1" dy="1" stdDeviation="1" flood-color="#4e342e" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+  <circle cx="32" cy="32" r="26" fill="url(#fivespice-base)" filter="url(#fivespice-shadow)"/>
+  <ellipse cx="28" cy="28" rx="6" ry="5" fill="#a1887f" opacity="0.5"/>
+</svg>

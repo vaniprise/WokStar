@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" data-hitbox-shape="box" data-hitbox-width="48" data-hitbox-height="20" data-viewbox-half="32">
+  <defs>
+    <linearGradient id="noodle-stroke" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#ffecb3"/>
+      <stop offset="50%" stop-color="#ffcc80"/>
+      <stop offset="100%" stop-color="#ffb74d"/>
+    </linearGradient>
+    <filter id="noodle-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="1" stdDeviation="0.8" flood-color="#e65100" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+  <path d="M8 32 Q20 28 32 32 Q44 36 56 32" stroke="url(#noodle-stroke)" stroke-width="10" fill="none" stroke-linecap="round" filter="url(#noodle-shadow)"/>
+  <path d="M8 32 Q20 28 32 32 Q44 36 56 32" stroke="#fff8e1" stroke-width="3" fill="none" stroke-linecap="round" opacity="0.5"/>
+</svg>

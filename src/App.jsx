@@ -4,6 +4,7 @@ import { initializeApp, getApps } from 'firebase/app';
 import { getAuth, signInWithCustomToken, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { getFirestore, collection, addDoc, onSnapshot } from 'firebase/firestore';
 import GameLoop from './GameLoop';
+import LiquidFunTest from './LiquidFunTest';
 import RestaurantHub, { loadRestaurantState, saveRestaurantState } from './RestaurantHub';
 import { initAudio as initAudioEngine } from './audioEngine';
 
@@ -395,6 +396,14 @@ const STORY_CHAPTERS = [
   { target: 5000, chapter: 5, title: "EPILOGUE: Ascension", desc: "A divine light beams from the heavens. You are officially recognized by the celestial courts. You are the true SIK SAN!", goal: "Endless Glory.", color: "text-fuchsia-400", border: "border-fuchsia-900" }
 ];
 
+// Pro Wok Kitchen path: apex challenge branch (unlocked after Ch3, optional)
+const PRO_KITCHEN_CHAPTERS = [
+  { target: 2000, chapter: 0, title: "The Golden Wok — Trial", desc: "You step into a stainless-steel inferno. Two woks, a fry station, noodles boiling. The head chef doesn't look up: 'You have one service. Don't burn my line.'", goal: "Reach 2,000 score in one shift. No second chances.", color: "text-amber-400", border: "border-amber-800" },
+  { target: 4500, chapter: 1, title: "Wok 1 & Wok 2", desc: "They gave you the station. Orders fly from both sides — triads, critics, and a guy who wants his noodles 'like yesterday'. The line never stops.", goal: "Reach 4,500. Hold both woks without losing the line.", color: "text-orange-500", border: "border-orange-800" },
+  { target: 7500, chapter: 2, title: "Head Chef of the Line", desc: "The old head chef nods once and steps back. The kitchen is yours. Steam, fire, and tickets as far as the eye can see. This is the apex.", goal: "Reach 7,500. Prove you are the Sik San of the line.", color: "text-red-600", border: "border-red-900" }
+];
+const PRO_KITCHEN_EPILOGUE = { title: "EPILOGUE: The Line Recognizes You", desc: "No TV cameras. No trophies. Just the crew banging ladles on steel and the head chef handing you a worn towel. 'You're one of us now.' The true apex.", goal: "Endless Glory.", color: "text-amber-400", border: "border-amber-900" };
+
 const getScoreTitle = (score) => {
   if (score >= 5000) return { title: "Sik San (God of Cookery) 食神", color: "text-fuchsia-400" };
   if (score >= 2500) return { title: "Wok Hei Dragon 鑊氣神龍", color: "text-red-500" };
@@ -490,13 +499,32 @@ const UPGRADES = [
 // NPC CHARACTERS & SIDE QUESTS
 // ==========================================
 const NPC_CHARACTERS = {
-  turkey:    { name: "Turkey",           chName: "火雞",     icon: "🐔", color: "text-pink-400",    border: "border-pink-700",    bg: "from-pink-950/90" },
-  goose:     { name: "Goose",            chName: "鵝頭",     icon: "🦢", color: "text-emerald-400", border: "border-emerald-700", bg: "from-emerald-950/90" },
-  master:    { name: "Wet Dream Master", chName: "夢遺大師", icon: "🧘", color: "text-yellow-400",  border: "border-yellow-700",  bg: "from-yellow-950/90" },
-  sister13:  { name: "Sister Thirteen",  chName: "十三姨",   icon: "🥢", color: "text-red-400",     border: "border-red-700",     bg: "from-red-950/90" },
-  bull_tong: { name: "Bull Tong",        chName: "唐牛",     icon: "🐂", color: "text-orange-400",  border: "border-orange-700",  bg: "from-orange-950/90" },
+  turkey: {
+    name: "Turkey", chName: "火雞", icon: "🐔", color: "text-pink-400", border: "border-pink-700", bg: "from-pink-950/90",
+    backstory: "Former sous-chef to a legendary noodle god who ascended to the moon. Her scars came from a wok explosion when she tried to cook 'cosmic char siu' during a lunar eclipse. She now sells Pissing Beef Balls because they're the only thing that doesn't trigger her flashbacks. Secretly runs a midnight cooking support group for traumatized chefs. Has a pet cockroach named 'Little Wok' that she claims is a reincarnated food critic."
+  },
+  goose: {
+    name: "Goose", chName: "鵝頭", icon: "🦢", color: "text-emerald-400", border: "border-emerald-700", bg: "from-emerald-950/90",
+    backstory: "His neck stretched to legendary proportions during a failed 'Chicken Neck Soup' assassination attempt — he drank the wrong bowl and his neck kept growing for 3 days. Now he's the only triad member who can peek over restaurant walls to spy on recipes. His blog 'Anonymous Foodie 14K' started as a cover for reconnaissance but became genuinely popular. He's allergic to geese (ironic) and cries when he eats good congee. Has a secret twin brother who's a Michelin inspector."
+  },
+  master: {
+    name: "Wet Dream Master", chName: "夢遺大師", icon: "🧘", color: "text-yellow-400", border: "border-yellow-700", bg: "from-yellow-950/90",
+    backstory: "His nickname comes from a legendary dream where he mastered all 108 Wok Hei techniques by cooking in his sleep — he woke up speaking fluent 'wok' and could season dishes with his thoughts. He's 147 years old but looks 47 because he bathes in aged soy sauce. His eyebrows are so long they're registered as historical artifacts. Once trained a cat to do the Tiger Claw toss; the cat now runs a rival food stall. Has a secret room filled with cursed cookware."
+  },
+  sister13: {
+    name: "Sister Thirteen", chName: "十三姨", icon: "🥢", color: "text-red-400", border: "border-red-700", bg: "from-red-950/90",
+    backstory: "The 13th daughter of a family that only keeps daughters. Her golden chopsticks are made from the tooth of a sea dragon that choked on undercooked fish. She's never left more than 3 customers delighted because she secretly believes perfection is boring — she WANTS to see someone fail gloriously. She's dating a rival critic's ghost. Has a collection of 666 bad restaurant reviews framed in her house. Her real name is a state secret."
+  },
+  bull_tong: {
+    name: "Bull Tong", chName: "唐牛", icon: "🐂", color: "text-orange-400", border: "border-orange-700", bg: "from-orange-950/90",
+    backstory: "Born in a literal bull stable, he was raised by a disgraced chef who taught him that 'flame is fear.' His bull emblem is a tribute to his 12 bovine foster siblings. He invented the Mega-Laser Wok after a wok exploded and he decided to weaponize it. Secretly runs a cooking show for houseplants. Has a phobia of grandma's home cooking. His tears are 100% pure MSG."
+  },
+  headhunter: {
+    name: "The Headhunter", chName: "金鑊使者", icon: "🔥", color: "text-amber-400", border: "border-amber-700", bg: "from-amber-950/90",
+    backstory: "Nobody knows who sends them. They appear after Shaolin graduation with a single offer: the Golden Wok, a pro kitchen where only speed and steel matter. No TV, no Bull Tong — just the line."
+  },
 };
-const NPC_IMAGES = { turkey: '/npc/turkey.png', goose: '/npc/goose.png', master: '/npc/master.png', sister13: '/npc/sister13.png', bull_tong: '/npc/bull_tong.png' };
+const NPC_IMAGES = { turkey: '/npc/turkey.png', goose: '/npc/goose.png', master: '/npc/master.png', sister13: '/npc/sister13.png', bull_tong: '/npc/bull_tong.png', headhunter: '/npc/bull_tong.png' };
 
 const SIDE_QUESTS = [
   {
@@ -599,6 +627,30 @@ const SIDE_QUESTS = [
     ]
   },
   {
+    id: 'pro_kitchen_branch', npc: 'headhunter', chapter: 4,
+    title: "The Golden Wok Calls",
+    dialog: [
+      "「你喺少林畢業。有人想見你。」",
+      "(You graduated from Shaolin. Someone wants to meet you.)",
+      "A figure in a sharp suit places a card on your counter. No name — just an address and a time. 'The Golden Wok. Two woks, one fry station, no mercy. They're looking for a line cook who can take the heat.' Bull Tong and the TV showdown can wait. This is the real apex — if you want it.",
+      "⚠️ PRO KITCHEN: Extreme speed. Shorter tickets. Higher targets. No Bull Tong story. Only for those who want the ultimate challenge."
+    ],
+    choices: [
+      {
+        id: 'accept_pro', label: '🔥 "I want the line."',
+        response: "「聽日見。唔好遲。」(See you tomorrow. Don't be late.)",
+        effects: { storyPath: 'pro_kitchen' },
+        desc: "Enter the Pro Kitchen path. Harder, faster, different ending."
+      },
+      {
+        id: 'decline_pro', label: '📺 "I have a score to settle first."',
+        response: "「隨你。張卡留俾你。」(Your choice. The card stays.)",
+        effects: { storyPath: 'main' },
+        desc: "Continue the main story: Bull Tong, Turkey, and the Sorrowful Rice."
+      }
+    ]
+  },
+  {
     id: 'bull_tong_ch4', npc: 'bull_tong', chapter: 4,
     title: "Sabotage!",
     dialog: [
@@ -668,6 +720,151 @@ const SIDE_QUESTS = [
       }
     ]
   },
+  // --- WHACKY BACKSTORY SIDEQUESTS ---
+  {
+    id: 'turkey_ch2_littlewok', npc: 'turkey', chapter: 2,
+    requires: { questId: 'turkey_ch1', choiceId: 'gift' },
+    title: "Little Wok's Blessing",
+    dialog: [
+      "「小鑊話你煮嘢有誠意。佢好少咁講。」",
+      "(Little Wok says your cooking has heart. He rarely says that.)",
+      "Turkey's pet cockroach — 'Little Wok' — perches on her shoulder, antennae twitching. She claims he's a reincarnated food critic. He's staring at your wok with unsettling intensity."
+    ],
+    choices: [
+      {
+        id: 'honor', label: '🙏 "I am humbled by Little Wok\'s wisdom."',
+        response: "「佢話你合格喇。」(He says you pass.)",
+        effects: { littleWokBlessing: true },
+        desc: "Little Wok's blessing: +5% Wok Hei on all dishes. Cockroach-approved."
+      },
+      {
+        id: 'skeptic', label: '😐 "It\'s... a cockroach."',
+        response: "「你唔信？佢會記住你。」(You don't believe? He'll remember.)",
+        effects: { littleWokOffended: true },
+        desc: "Little Wok is offended. Random -1 delight 😊 per shift until you apologize."
+      }
+    ]
+  },
+  {
+    id: 'turkey_ch3_support', npc: 'turkey', chapter: 3,
+    requires: { questId: 'turkey_ch1', choiceId: 'gift' },
+    title: "Midnight Trauma Support",
+    dialog: [
+      "「我哋每個禮拜三半夜都有聚會。煮過嘢燒親嘅人，都可以嚟。」",
+      "(We meet every Wednesday at midnight. Anyone who's ever been burned by cooking can come.)",
+      "Turkey hands you a crumpled flyer: 'Wok Burn Survivors Anonymous — No Judgment, Only Congee.' She looks hopeful."
+    ],
+    choices: [
+      {
+        id: 'attend', label: '🕯️ "I\'ll be there. I have stories."',
+        response: "「多謝你。我哋等緊你。」(Thank you. We've been waiting for you.)",
+        effects: { traumaSupport: true },
+        desc: "Join the group. -15% burn rate. Emotional support buff."
+      },
+      {
+        id: 'decline', label: '😅 "I\'m... fine. Really."',
+        response: "「唔緊要。門永遠開住。」(It's okay. The door is always open.)",
+        effects: {},
+        desc: "Turkey nods. No bonus, but no penalty."
+      }
+    ]
+  },
+  {
+    id: 'goose_ch3_congee', npc: 'goose', chapter: 3,
+    requires: { questId: 'goose_ch2', choiceId: 'accept' },
+    title: "The Congee That Made Him Cry",
+    dialog: [
+      "「大佬要我去試一間新舖。但我食到好嘅粥就會喊...你明唔明？」",
+      "(Boss wants me to scout a new place. But good congee makes me cry... you get it?)",
+      "Goose's eyes are already glistening. He needs you to cook him a bowl so perfect he can report 'unremarkable' and keep his cover. His neck trembles."
+    ],
+    choices: [
+      {
+        id: 'perfect', label: '🍲 Cook the congee of his dreams.',
+        response: "「...多謝。我唔會忘記。」(...Thank you. I won't forget.)",
+        effects: { gooseCongee: true },
+        desc: "+$150. Goose's loyalty deepens. Failed orders cost 0 delight 😊 once per run."
+      },
+      {
+        id: 'mediocre', label: '😏 "Here. Average congee. You\'re welcome."',
+        response: "「你...你特登嘅？」(You... did that on purpose?)",
+        effects: { gooseRespect: true },
+        desc: "Goose is impressed by your restraint. +3 Soul."
+      }
+    ]
+  },
+  {
+    id: 'sister13_ch3_ghost', npc: 'sister13', chapter: 3,
+    requires: { questId: 'sister13_ch2', choiceId: 'accept_review' },
+    title: "The Ghost's Last Meal",
+    dialog: [
+      "「我男朋友...佢係鬼。佢想食最後一餐。」",
+      "(My boyfriend... he's a ghost. He wants one last meal.)",
+      "Sister Thirteen's chopsticks tremble. A faint, translucent figure hovers behind her — a man in a critic's suit, mouth watering at memories of food."
+    ],
+    choices: [
+      {
+        id: 'cook_ghost', label: '👻 "I\'ll cook for the dead."',
+        response: "「佢話...好食。多謝。」(He says... delicious. Thank you.)",
+        effects: { ghostMeal: true },
+        desc: "The ghost is satisfied. +10% revenue. Ghost customers occasionally tip in ectoplasm."
+      },
+      {
+        id: 'refuse_ghost', label: '😰 "I don\'t do... spectral catering."',
+        response: "「...我明。佢都明。」(...I understand. He understands too.)",
+        effects: {},
+        desc: "Sister Thirteen leaves. The ghost fades with a disappointed sigh."
+      }
+    ]
+  },
+  {
+    id: 'master_ch4_cursed', npc: 'master', chapter: 4,
+    requires: { questId: 'master_ch3' },
+    title: "The Cursed Wok of Regret",
+    dialog: [
+      "「呢個鑊...煮過嘢嘅人都會後悔。你夠唔夠膽？」",
+      "(This wok... everyone who's cooked with it has regretted it. Do you dare?)",
+      "The Wet Dream Master opens a hidden door. Inside: a wok that hums. His eyebrows twitch. The cat that learned Tiger Claw hisses from the shadows."
+    ],
+    choices: [
+      {
+        id: 'take_cursed', label: '🔥 "I live for regret."',
+        response: "「猛。記住：後悔都係調味料。」(Bold. Remember: regret is also seasoning.)",
+        effects: { cursedWok: true },
+        desc: "+25% Wok Hei, but -1 random delight 😊 per 5 serves. High risk."
+      },
+      {
+        id: 'refuse_cursed', label: '🙅 "I\'ve seen enough horror movies."',
+        response: "「聰明。個鑊等緊下一個傻仔。」(Wise. The wok waits for the next fool.)",
+        effects: { soulBonus: 5, cursedWokRefused: true },
+        desc: "+5 Soul for wisdom. The wok weeps."
+      }
+    ]
+  },
+  {
+    id: 'bull_tong_ch4_plants', npc: 'bull_tong', chapter: 4,
+    requires: { questId: 'bull_tong_ch4', choiceId: ['endure', 'counter'] },
+    title: "Bull Tong's Secret Audience",
+    dialog: [
+      "「...你點知我嘅節目？！」",
+      "(...How did you find out about my show?!)",
+      "You've stumbled into Bull Tong's secret studio. Dozens of potted plants face a tiny stage. A fern waves. Bull Tong's face is red. 'Cooking for Foliage' plays on a loop."
+    ],
+    choices: [
+      {
+        id: 'blackmail', label: '🌿 "I could tell everyone about your... plants."',
+        response: "「你...！好，我減輕啲破壞。但唔好講出去！」(You...! Fine, I'll ease the sabotage. But don't tell anyone!)",
+        effects: { plantBlackmail: true },
+        desc: "Sabotage severity -50%. Bull Tong's secret is safe. For now."
+      },
+      {
+        id: 'compliment', label: '💚 "Your ficus looks very... nourished."',
+        response: "「...你真係咁諗？佢叫阿強。」(...You really think so? His name is Ah Keung.)",
+        effects: { bullTongConfused: true },
+        desc: "Bull Tong is confused by kindness. Sabotage -20%. He might spare you."
+      }
+    ]
+  },
 ];
 
 // ==========================================
@@ -734,6 +931,8 @@ export default function App() {
   const [gameState, setGameState] = useState('MENU'); 
   const [isStoryMode, setIsStoryMode] = useState(false);
   const [currentChapter, setCurrentChapter] = useState(0);
+  const [storyPath, setStoryPath] = useState(null); // null | 'main' | 'pro_kitchen'
+  const [proKitchenChapter, setProKitchenChapter] = useState(0); // 0, 1, 2 for Pro Kitchen path
   
   const [score, setScore] = useState(0); 
   const [cash, setCash] = useState(0);   
@@ -797,6 +996,7 @@ export default function App() {
   const [showGuide, setShowGuide] = useState(false);
   const [showRecipes, setShowRecipes] = useState(false);
   const [showLeaderboard, setShowLeaderboard] = useState(false);
+  const [showLiquidFunTest, setShowLiquidFunTest] = useState(false);
   const [showShop, setShowShop] = useState(false);
   const [showOptions, setShowOptions] = useState(false);
   const [sfxVol, setSfxVol] = useState(50);
@@ -846,8 +1046,8 @@ export default function App() {
   });
 
   useEffect(() => {
-    gameDataRef.current = { ...gameDataRef.current, heatLevel, wokContents, cookProgress, burnProgress, wokHei, wokResidue, isCleaning, showGuide, showLeaderboard, showShop, showRecipes, flameTheme, ownedUpgrades, activePrepBuff, difficulty, oilLevel, isOiling, toss, waterLevel, waterDirtiness, npcBuffs };
-  }, [heatLevel, wokContents, cookProgress, burnProgress, wokHei, wokResidue, isCleaning, showGuide, showLeaderboard, showShop, showRecipes, flameTheme, ownedUpgrades, activePrepBuff, difficulty, oilLevel, isOiling, toss, waterLevel, waterDirtiness, npcBuffs]);
+    gameDataRef.current = { ...gameDataRef.current, heatLevel, wokContents, cookProgress, burnProgress, wokHei, wokResidue, isCleaning, showGuide, showLeaderboard, showShop, showRecipes, flameTheme, ownedUpgrades, activePrepBuff, difficulty, oilLevel, isOiling, toss, waterLevel, waterDirtiness, npcBuffs, storyPath, proKitchenChapter };
+  }, [heatLevel, wokContents, cookProgress, burnProgress, wokHei, wokResidue, isCleaning, showGuide, showLeaderboard, showShop, showRecipes, flameTheme, ownedUpgrades, activePrepBuff, difficulty, oilLevel, isOiling, toss, waterLevel, waterDirtiness, npcBuffs, storyPath, proKitchenChapter]);
 
   useEffect(() => {
     scoreRef.current = score;
@@ -953,7 +1153,11 @@ export default function App() {
         }).filter(o => o.timeLeft > -2); 
 
         if (repLost > 0) {
-            const perFail = state.npcBuffs?.gooseProtection ? 1 : 2;
+            let perFail = state.npcBuffs?.gooseProtection ? 1 : 2;
+            if (state.npcBuffs?.littleWokOffended) perFail += 1;
+            const useGooseCongee = state.npcBuffs?.gooseCongee && !state.npcBuffs?.gooseCongeeUsed;
+            if (useGooseCongee) perFail = 0;
+            setNpcBuffs(prev => useGooseCongee ? { ...prev, gooseCongeeUsed: true } : prev);
             setDelight(d => {
               const next = Math.max(-10, d - repLost * perFail);
               if (next <= -10) setGameState('GAMEOVER');
@@ -963,12 +1167,14 @@ export default function App() {
         return newOrders;
       });
 
-      if (Math.random() < 0.02 && state.orders?.length < 3) {
+      if (Math.random() < (state.storyPath === 'pro_kitchen' ? 0.028 : 0.02) && state.orders?.length < (state.storyPath === 'pro_kitchen' ? 4 : 3)) {
         const availableRecipes = isStoryMode 
             ? RECIPES.filter(r => r.chapter <= currentChapter) 
             : RECIPES;
         let baseRecipe = availableRecipes[Math.floor(Math.random() * availableRecipes.length)];
-        let newOrder = { ...baseRecipe, id: Date.now(), timeLeft: baseRecipe.timeLimit };
+        const proTimeMult = state.storyPath === 'pro_kitchen' ? 0.75 : 1;
+        const orderTimeLimit = baseRecipe.timeLimit * proTimeMult;
+        let newOrder = { ...baseRecipe, id: Date.now(), timeLeft: orderTimeLimit, timeLimit: orderTimeLimit };
         
         const eventChance = state.npcBuffs?.triadPressure ? 0.45 : 0.25;
         if ((!isStoryMode || currentChapter > 0) && Math.random() < eventChance) {
@@ -1031,7 +1237,9 @@ export default function App() {
       }
 
       if (state.npcBuffs?.sabotageActive && !state.npcBuffs?.turkeyAlly) {
-         const shutoffChance = state.npcBuffs?.sabotageLevel === 'hard' ? 0.004 : 0.002;
+         let shutoffChance = state.npcBuffs?.sabotageLevel === 'hard' ? 0.004 : 0.002;
+         if (state.npcBuffs?.plantBlackmail) shutoffChance *= 0.5;
+         if (state.npcBuffs?.bullTongConfused) shutoffChance *= 0.8;
          if (Math.random() < shutoffChance) {
             setHeatLevel(0);
             showNotification("SABOTAGE! 🐂 Bull Tong killed your burner!", "error");
@@ -1053,6 +1261,8 @@ export default function App() {
         if (state.npcBuffs?.masterPath === 'tiger') whMult += 0.4;
         if (state.npcBuffs?.masterPath === 'middle') whMult += 0.15;
         if (state.npcBuffs?.masterPath === 'water') whMult -= 0.2;
+        if (state.npcBuffs?.littleWokBlessing) whMult += 0.05;
+        if (state.npcBuffs?.cursedWok) whMult += 0.25;
 
         let burnResist = 1;
         if (state.ownedUpgrades.includes('turbo_burner')) burnResist += 0.5; 
@@ -1061,6 +1271,7 @@ export default function App() {
         if (state.npcBuffs?.masterPath === 'tiger') burnResist += 0.25;
         if (state.npcBuffs?.masterPath === 'water') burnResist -= 0.4;
         if (state.npcBuffs?.masterPath === 'middle') burnResist -= 0.15;
+        if (state.npcBuffs?.traumaSupport) burnResist -= 0.15;
 
         let cookSpeedMod = 1;
         if (state.ownedUpgrades.includes('turbo_burner')) cookSpeedMod += 0.5; 
@@ -1171,7 +1382,7 @@ export default function App() {
     const wokCenterX = cw / 2;
     const wokCenterY = ch / 2 + 30; 
     const wokRadius = 140;
-    const innerRadius = wokRadius - 16;
+    const innerRadius = wokRadius - 14; // cooking surface = wall (match WokPhysics)
 
     let lastDrawTime = performance.now();
     const fpsInterval = 1000 / 60; // 60 FPS cap for high-refresh rate monitors
@@ -1439,8 +1650,8 @@ export default function App() {
             }
             
             if (f.y > currentWokY - 150) {
-                if (f.x < currentWokX - innerRadius + 8) { f.x = currentWokX - innerRadius + 8; f.vx *= -0.5; }
-                if (f.x > currentWokX + innerRadius - 8) { f.x = currentWokX + innerRadius - 8; f.vx *= -0.5; }
+                if (f.x < currentWokX - innerRadius) { f.x = currentWokX - innerRadius; f.vx *= -0.5; }
+                if (f.x > currentWokX + innerRadius) { f.x = currentWokX + innerRadius; f.vx *= -0.5; }
             }
         } else {
             f.vy += 0.8 * mass;
@@ -1575,8 +1786,8 @@ export default function App() {
               }
 
               if (p.y > currentWokY - 120) {
-                  if (p.x < currentWokX - innerRadius + 8) { p.x = currentWokX - innerRadius + 8; p.vx *= -0.5; }
-                  if (p.x > currentWokX + innerRadius - 8) { p.x = currentWokX + innerRadius - 8; p.vx *= -0.5; }
+                  if (p.x < currentWokX - innerRadius) { p.x = currentWokX - innerRadius; p.vx *= -0.5; }
+                  if (p.x > currentWokX + innerRadius) { p.x = currentWokX + innerRadius; p.vx *= -0.5; }
               }
           }
       });
@@ -2242,7 +2453,9 @@ export default function App() {
               setGameState('PLAYING');
               const availableRecipes = RECIPES.filter(r => r.chapter <= currentChapter);
               const startRecipe = availableRecipes[Math.floor(Math.random() * availableRecipes.length)];
-              setOrders([{ ...startRecipe, id: Date.now(), timeLeft: startRecipe.timeLimit }]);
+              const proTimeMult = storyPath === 'pro_kitchen' ? 0.75 : 1;
+              const startTime = startRecipe.timeLimit * proTimeMult;
+              setOrders([{ ...startRecipe, id: Date.now(), timeLeft: startTime, timeLimit: startTime }]);
           } else {
               setCurrentPrepIdx(i => i + 1);
               setPrepChops(0);
@@ -2277,6 +2490,8 @@ export default function App() {
     setScoreSubmitted(false);
     setQuestLog({});
     setNpcBuffs({});
+    setStoryPath(null);
+    setProKitchenChapter(0);
     setNpcEncounter(null);
     emptyWok();
     setOrders([]);
@@ -2290,18 +2505,31 @@ export default function App() {
     }
   };
 
-  const getChapterEncounters = (chapter) => {
+  const getChapterEncounters = (chapter, isProPath = false) => {
+      const effectiveChapter = isProPath ? chapter : currentChapter;
+      const path = isProPath ? 'pro_kitchen' : storyPath;
       return SIDE_QUESTS.filter(quest => {
-          if (quest.chapter !== chapter) return false;
+          if (quest.chapter !== effectiveChapter) return false;
+          if (quest.id === 'pro_kitchen_branch' && path !== null) return false; // only show branch once, when path not yet chosen
           if (questLog[quest.id]) return false;
           if (quest.requires) {
-              if (questLog[quest.requires.questId] !== quest.requires.choiceId) return false;
+              const logVal = questLog[quest.requires.questId];
+              const cid = quest.requires.choiceId;
+              const ok = Array.isArray(cid) ? cid.includes(logVal) : logVal === cid;
+              if (!ok) return false;
           }
           return true;
       });
   };
 
   const getStoryProgress = () => {
+      if (storyPath === 'pro_kitchen') {
+          if (proKitchenChapter >= 3) return { pct: 100, current: score, target: score, label: 'Pro Kitchen complete' };
+          const proChap = PRO_KITCHEN_CHAPTERS[proKitchenChapter];
+          const target = proChap ? proChap.target * DIFF_MULTS[difficulty].target : 0;
+          const pct = target > 0 ? Math.max(0, Math.min(100, (score / target) * 100)) : 0;
+          return { pct, current: score, target, label: proChap ? proChap.goal : '' };
+      }
       if (currentChapter >= 5) return { pct: 100, current: score, target: score, label: 'Campaign complete' };
       const nextChap = STORY_CHAPTERS[currentChapter + 1];
       const target = nextChap ? nextChap.target * DIFF_MULTS[difficulty].target : 0;
@@ -2309,25 +2537,37 @@ export default function App() {
       return { pct, current: score, target, label: nextChap ? STORY_CHAPTERS[currentChapter].goal : '' };
   };
 
-  const getChapterTodos = (chapter) => {
-      const nextChap = STORY_CHAPTERS[chapter + 1];
+  const getChapterTodos = (chapter, isProPath = false) => {
+      const chapters = isProPath ? PRO_KITCHEN_CHAPTERS : STORY_CHAPTERS;
+      const nextChap = chapters[chapter + 1];
       const nextTarget = nextChap ? nextChap.target * DIFF_MULTS[difficulty].target : 0;
-      const baseGoal = STORY_CHAPTERS[chapter].goal;
+      const baseGoal = chapters[chapter] ? chapters[chapter].goal : '';
       const goalLabel = nextChap
         ? String(baseGoal).replace(/Reach a score of [\d,]+/, `Reach a score of ${Math.round(nextTarget)}`)
-        : 'Complete the campaign';
+        : (isProPath ? 'Complete the Pro Kitchen' : 'Complete the campaign');
       const todos = [{ id: 'goal', label: goalLabel, done: nextTarget > 0 && score >= nextTarget }];
-      const encounterQuests = SIDE_QUESTS.filter(q => q.chapter === chapter && (!q.requires || questLog[q.requires.questId] === q.requires.choiceId));
-      encounterQuests.forEach(q => {
-          todos.push({ id: q.id, label: `Meet ${NPC_CHARACTERS[q.npc].name}: ${q.title}`, done: !!questLog[q.id] });
-      });
+      if (!isProPath) {
+          const encounterQuests = SIDE_QUESTS.filter(q => {
+              if (q.chapter !== chapter) return false;
+              if (q.id === 'pro_kitchen_branch' && storyPath !== null) return false;
+              if (!q.requires) return true;
+              const logVal = questLog[q.requires.questId];
+              const cid = q.requires.choiceId;
+              return Array.isArray(cid) ? cid.includes(logVal) : logVal === cid;
+          });
+          encounterQuests.forEach(q => {
+              todos.push({ id: q.id, label: `Meet ${NPC_CHARACTERS[q.npc].name}: ${q.title}`, done: !!questLog[q.id] });
+          });
+      }
       return todos;
   };
 
   const continueStory = () => {
       initAudio();
       initAudioEngine();
-      const encounters = getChapterEncounters(currentChapter);
+      const isPro = storyPath === 'pro_kitchen';
+      const chapter = isPro ? proKitchenChapter : currentChapter;
+      const encounters = getChapterEncounters(chapter, isPro);
       if (encounters.length > 0) {
           const [first, ...rest] = encounters;
           setNpcEncounter({ ...first, phase: 'dialog', remaining: rest });
@@ -2348,7 +2588,11 @@ export default function App() {
           setSoul(s => s + fx.soulBonus);
           triggerStreakPopup(`+${fx.soulBonus} SOUL`, '#22d3ee');
       }
-      const { cashBonus, soulBonus, ...persistentBuffs } = fx;
+      if (quest.id === 'pro_kitchen_branch' && fx.storyPath) {
+          setStoryPath(fx.storyPath);
+          if (fx.storyPath === 'pro_kitchen') setProKitchenChapter(0);
+      }
+      const { cashBonus, soulBonus, storyPath: _sp, ...persistentBuffs } = fx;
       if (Object.keys(persistentBuffs).length > 0) {
           setNpcBuffs(prev => ({ ...prev, ...persistentBuffs }));
       }
@@ -2362,7 +2606,11 @@ export default function App() {
           setNpcEncounter({ ...next, phase: 'dialog', remaining: rest });
       } else {
           setNpcEncounter(null);
-          startPrepPhase();
+          if (npcEncounter?.id === 'pro_kitchen_branch' && storyPath === 'pro_kitchen') {
+              setGameState('STORY_CHAPTER');
+          } else {
+              startPrepPhase();
+          }
       }
   };
 
@@ -2657,10 +2905,15 @@ export default function App() {
         if (gameDataRef.current.ownedUpgrades.includes('cursed_chili')) cashMult += 0.5;
         if (gameDataRef.current.ownedUpgrades.includes('msg_shaker')) cashMult += 0.25;
         if (npcBuffs.revenueBonus) cashMult += npcBuffs.revenueBonus;
+        if (npcBuffs.ghostMeal) cashMult += 0.1;
         if (npcBuffs.soloFinale) cashMult += 0.3;
+        if (npcBuffs.cursedWok) cashMult -= 0.05;
         if (npcBuffs.sabotageActive && !npcBuffs.turkeyAlly) {
-            const penalty = npcBuffs.sabotageLevel === 'hard' ? 0.35 : 0.2;
-            cashMult -= npcBuffs.bullTongWeakened ? penalty * 0.5 : penalty;
+            let penalty = npcBuffs.sabotageLevel === 'hard' ? 0.35 : 0.2;
+            if (npcBuffs.bullTongWeakened) penalty *= 0.5;
+            if (npcBuffs.plantBlackmail) penalty *= 0.5;
+            if (npcBuffs.bullTongConfused) penalty *= 0.8;
+            cashMult -= penalty;
             if (npcBuffs.counterBonus) cashMult += 0.4;
         }
         finalRevenue = (finalRevenue * cashMult) + speedTip;
@@ -2684,14 +2937,29 @@ export default function App() {
             setScore(prevScore => {
                 const newScore = prevScore + finalRevenue;
                 if (isStoryMode) {
-                    const nextChap = STORY_CHAPTERS[currentChapter + 1];
-                    const targetNeeded = nextChap ? nextChap.target * DIFF_MULTS[difficulty].target : Infinity;
-                    if (nextChap && newScore >= targetNeeded) {
-                        const nextChapterIndex = currentChapter + 1;
-                        setTimeout(() => {
-                            setCurrentChapter(curr => curr + 1);
-                            setGameState(nextChapterIndex === 5 ? 'EPILOGUE' : 'STORY_CHAPTER');
-                        }, 1500);
+                    if (gameDataRef.current.storyPath === 'pro_kitchen') {
+                        const proIdx = gameDataRef.current.proKitchenChapter;
+                        const proChap = PRO_KITCHEN_CHAPTERS[proIdx];
+                        const targetNeeded = proChap ? proChap.target * DIFF_MULTS[gameDataRef.current.difficulty].target : Infinity;
+                        if (proChap && newScore >= targetNeeded) {
+                            setProKitchenChapter(curr => {
+                                const next = curr + 1;
+                                setTimeout(() => {
+                                    setGameState(next >= 3 ? 'EPILOGUE' : 'STORY_CHAPTER');
+                                }, 1500);
+                                return next;
+                            });
+                        }
+                    } else {
+                        const nextChap = STORY_CHAPTERS[currentChapter + 1];
+                        const targetNeeded = nextChap ? nextChap.target * DIFF_MULTS[difficulty].target : Infinity;
+                        if (nextChap && newScore >= targetNeeded) {
+                            const nextChapterIndex = currentChapter + 1;
+                            setTimeout(() => {
+                                setCurrentChapter(curr => curr + 1);
+                                setGameState(nextChapterIndex === 5 ? 'EPILOGUE' : 'STORY_CHAPTER');
+                            }, 1500);
+                        }
                     }
                 }
                 return newScore;
@@ -2708,6 +2976,16 @@ export default function App() {
                 quality: profit < 0 ? "Loss Margin!" : quality,
                 isPerfect: isPerfect
             };
+            if (npcBuffs.cursedWok) {
+                const nextServes = (npcBuffs.cursedWokServes || 0) + batchSize;
+                if (nextServes >= 5) {
+                    showNotification("Cursed Wok exacts its toll... -1 😊", "error");
+                    setDelight(d => { const n = Math.max(-10, d - 1); if (n <= -10) setGameState('GAMEOVER'); return n; });
+                    setNpcBuffs(prev => ({ ...prev, cursedWokServes: 0 }));
+                } else {
+                    setNpcBuffs(prev => ({ ...prev, cursedWokServes: nextServes }));
+                }
+            }
         }
 
         setCombo(newCombo);
@@ -2872,8 +3150,8 @@ export default function App() {
         {/* When playing: context label (My Restaurant / Sandbox / Chapter) centered, above score bar & objectives */}
         {gameState === 'PLAYING' && (
           <div className="absolute left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 pointer-events-none">
-            <div className={`text-xs md:text-sm font-bold truncate max-w-[50vw] ${isRestaurantMode ? 'text-amber-400' : !isStoryMode ? 'text-cyan-400' : (STORY_CHAPTERS[currentChapter]?.color ?? 'text-orange-400')}`} title={isRestaurantMode ? 'Restaurant shift' : !isStoryMode ? 'Sandbox mode' : 'Story chapter'}>
-              {isRestaurantMode ? '🍳 My Restaurant' : !isStoryMode ? '🧪 Sandbox Kitchen' : (STORY_CHAPTERS[currentChapter]?.title ?? 'Chapter 1')}
+            <div className={`text-xs md:text-sm font-bold truncate max-w-[50vw] ${isRestaurantMode ? 'text-amber-400' : !isStoryMode ? 'text-cyan-400' : (storyPath === 'pro_kitchen' ? PRO_KITCHEN_CHAPTERS[proKitchenChapter]?.color : STORY_CHAPTERS[currentChapter]?.color) ?? 'text-orange-400'}`} title={isRestaurantMode ? 'Restaurant shift' : !isStoryMode ? 'Sandbox mode' : 'Story chapter'}>
+              {isRestaurantMode ? '🍳 My Restaurant' : !isStoryMode ? '🧪 Sandbox Kitchen' : (storyPath === 'pro_kitchen' ? PRO_KITCHEN_CHAPTERS[proKitchenChapter]?.title ?? 'Pro Kitchen' : (STORY_CHAPTERS[currentChapter]?.title ?? 'Chapter 1'))}
             </div>
             {isStoryMode && storyProgress !== null && (
               <div className="flex items-center gap-2 md:gap-3 flex-wrap justify-center">
@@ -2962,7 +3240,7 @@ export default function App() {
       </header>
 
       {/* --- MENU STATE --- */}
-      {gameState === 'MENU' && !showGuide && !showLeaderboard && !showShop && !showRecipes && (
+      {gameState === 'MENU' && !showGuide && !showLeaderboard && !showShop && !showRecipes && !showLiquidFunTest && (
         <div className="flex-1 flex items-center justify-center bg-neutral-900/90 absolute inset-0 z-50 backdrop-blur-sm">
           <div className="text-center bg-neutral-900 p-8 rounded-3xl border border-neutral-800 shadow-[0_0_100px_rgba(249,115,22,0.15)] max-w-md w-full">
             <Flame size={64} className="mx-auto text-orange-500 mb-4 animate-pulse" />
@@ -2999,6 +3277,9 @@ export default function App() {
                    <Trophy size={16} /> Rankings
                  </button>
               </div>
+              <button onClick={() => setShowLiquidFunTest(true)} className="py-2 text-[10px] text-neutral-500 hover:text-neutral-400 uppercase tracking-wider">
+                LiquidFun test
+              </button>
             </div>
           </div>
         </div>
@@ -3020,18 +3301,26 @@ export default function App() {
       {/* --- STORY CHAPTER OVERLAYS --- */}
       {(gameState === 'STORY_CHAPTER' || gameState === 'EPILOGUE') && !showShop && !showRecipes && (
         <div className="flex-1 flex items-center justify-center bg-neutral-950/95 absolute inset-0 z-50 p-4">
-           <div className={`text-center bg-neutral-900 p-8 md:p-12 rounded-3xl border-2 ${STORY_CHAPTERS[currentChapter].border} max-w-2xl w-full shadow-2xl relative overflow-hidden`}>
-            <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-transparent via-current to-transparent opacity-50" style={{ color: STORY_CHAPTERS[currentChapter].color }} />
+           {(() => {
+             const isPro = storyPath === 'pro_kitchen';
+             const effectiveChapter = isPro ? proKitchenChapter : currentChapter;
+             const chapterData = gameState === 'EPILOGUE'
+               ? (isPro ? PRO_KITCHEN_EPILOGUE : STORY_CHAPTERS[5])
+               : (isPro ? PRO_KITCHEN_CHAPTERS[effectiveChapter] : STORY_CHAPTERS[effectiveChapter]);
+             if (!chapterData) return null;
+             return (
+           <div className={`text-center bg-neutral-900 p-8 md:p-12 rounded-3xl border-2 ${chapterData.border} max-w-2xl w-full shadow-2xl relative overflow-hidden`}>
+            <div className="absolute top-0 left-0 right-0 h-2 bg-gradient-to-r from-transparent via-current to-transparent opacity-50" style={{ color: chapterData.color }} />
             
-            <h3 className={`text-lg md:text-xl font-bold mb-2 uppercase tracking-widest ${STORY_CHAPTERS[currentChapter].color}`}>
-               {gameState === 'EPILOGUE' ? 'CAMPAIGN COMPLETE' : 'STORY MODE'}
+            <h3 className={`text-lg md:text-xl font-bold mb-2 uppercase tracking-widest ${chapterData.color}`}>
+               {gameState === 'EPILOGUE' ? (isPro ? 'PRO KITCHEN COMPLETE' : 'CAMPAIGN COMPLETE') : (isPro ? 'PRO KITCHEN' : 'STORY MODE')}
             </h3>
             <h2 className="text-3xl md:text-5xl font-black mb-6 text-white leading-tight">
-               {String(STORY_CHAPTERS[currentChapter].title)}
+               {String(chapterData.title)}
             </h2>
             
             <p className="text-neutral-300 md:text-lg mb-8 leading-relaxed italic">
-               "{String(STORY_CHAPTERS[currentChapter].desc)}"
+               "{String(chapterData.desc)}"
             </p>
             
             {gameState !== 'EPILOGUE' && (
@@ -3062,7 +3351,7 @@ export default function App() {
                  })()}
                  <div className="text-xs text-neutral-500 uppercase tracking-widest mb-2 border-t border-neutral-700 pt-3 mt-3">Objectives</div>
                  <ul className="space-y-1.5">
-                   {getChapterTodos(currentChapter).map(t => (
+                   {getChapterTodos(effectiveChapter, isPro).map(t => (
                      <li key={t.id} className={`flex items-center gap-2 text-sm ${t.done ? 'text-green-400' : 'text-neutral-300'}`}>
                        <span className="shrink-0 w-5 h-5 flex items-center justify-center rounded bg-black/50 border border-neutral-700">
                          {t.done ? <CheckCircle className="w-3.5 h-3.5 text-green-400" /> : <span className="text-neutral-500">○</span>}
@@ -3082,7 +3371,7 @@ export default function App() {
                   </div>
                   <span className="text-lg font-black text-fuchsia-400 tabular-nums">100%</span>
                 </div>
-                <p className="text-sm text-neutral-400">Campaign complete. You are the true Sik San!</p>
+                <p className="text-sm text-neutral-400">{storyPath === 'pro_kitchen' ? 'The line recognizes you. You are one of them.' : 'Campaign complete. You are the true Sik San!'}</p>
               </div>
             )}
 
@@ -3091,10 +3380,11 @@ export default function App() {
                 <ShoppingCart size={24} /> Shop
               </button>
               <button onClick={gameState === 'EPILOGUE' ? quitToMenu : continueStory} className={`flex-1 py-4 ${gameState === 'EPILOGUE' ? 'bg-fuchsia-600 hover:bg-fuchsia-500' : 'bg-orange-600 hover:bg-orange-500'} rounded-xl font-bold text-lg md:text-xl uppercase tracking-widest text-white transition-transform active:scale-95 shadow-lg`}>
-                {gameState === 'EPILOGUE' ? 'Return to Menu' : (currentChapter === 0 ? 'Start Prep Phase!' : 'Continue Campaign')}
+                {gameState === 'EPILOGUE' ? 'Return to Menu' : (storyPath === 'pro_kitchen' ? 'Start Prep Phase!' : (currentChapter === 0 ? 'Start Prep Phase!' : 'Continue Campaign'))}
               </button>
             </div>
           </div>
+           ); })()}
         </div>
       )}
 
@@ -3132,7 +3422,15 @@ export default function App() {
               <h3 className={`text-sm md:text-base font-bold uppercase tracking-[0.3em] ${NPC_CHARACTERS[npcEncounter.npc].color} mb-1`}>
                 {String(NPC_CHARACTERS[npcEncounter.npc].name)} <span className="opacity-60">{String(NPC_CHARACTERS[npcEncounter.npc].chName)}</span>
               </h3>
-              <h2 className="text-2xl md:text-4xl font-black mb-6 text-white leading-tight">{String(npcEncounter.title)}</h2>
+              <h2 className="text-2xl md:text-4xl font-black mb-4 text-white leading-tight">{String(npcEncounter.title)}</h2>
+              {NPC_CHARACTERS[npcEncounter.npc].backstory && (
+                <details className="mb-6 text-left group">
+                  <summary className="cursor-pointer text-xs uppercase tracking-widest text-neutral-500 hover:text-neutral-400 transition-colors list-none [&::-webkit-details-marker]:hidden flex items-center gap-1">
+                    <span>📖 Lore</span>
+                  </summary>
+                  <p className="mt-2 text-xs text-neutral-500 leading-relaxed italic border-l-2 border-neutral-700 pl-3">{String(NPC_CHARACTERS[npcEncounter.npc].backstory)}</p>
+                </details>
+              )}
               
               {npcEncounter.phase === 'dialog' ? (
                 <>
@@ -3495,6 +3793,10 @@ export default function App() {
             </button>
           </div>
         </div>
+      )}
+
+      {showLiquidFunTest && (
+        <LiquidFunTest onClose={() => setShowLiquidFunTest(false)} />
       )}
 
       {/* --- OPTIONS OVERLAY --- */}

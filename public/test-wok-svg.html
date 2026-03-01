@@ -1,0 +1,767 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LiquidFun particle sandbox</title>
+  <link rel="icon" href="data:," />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: #1a1a1a; color: #eee; padding: 12px; min-height: 100vh; }
+    h1 { font-size: 1rem; margin: 0 0 4px 0; }
+    p { font-size: 11px; color: #888; margin: 0 0 8px 0; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-start; }
+    .canvas-box { border: 2px solid #444; border-radius: 8px; line-height: 0; }
+    #c { display: block; background: #0d0d0d; cursor: grab; }
+    .side { background: #252525; border-radius: 8px; padding: 10px; max-width: 280px; }
+    .side h2 { font-size: 0.85rem; margin: 0 0 6px 0; color: #aaa; }
+    .btns { display: flex; flex-wrap: wrap; gap: 4px; }
+    .btns button { padding: 4px 8px; font-size: 10px; border: 1px solid #444; border-radius: 4px; background: #333; color: #ddd; cursor: pointer; }
+    .btns button:hover { background: #404040; }
+    .clr { margin-top: 6px; padding: 6px 10px; font-size: 11px; background: #5a2a2a; color: #f88; border: 1px solid #733; border-radius: 4px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <h1>LiquidFun particle sandbox</h1>
+  <p id="status">Loading Box2D…</p>
+  <p>Add particles to fill the container. Add water, oil, elastic, tensile, flames, gelatinous blobs, or floppy noodles.</p>
+  <div class="row">
+    <div class="canvas-box">
+      <canvas id="c" width="600" height="600"></canvas>
+    </div>
+    <div class="side">
+      <h2>Add ingredient</h2>
+      <div class="btns" id="btns"></div>
+      <button class="clr" id="clr">Clear all</button>
+    </div>
+  </div>
+
+  <script type="module">
+  import Box2DFactory from '/Box2D.js';
+  (function () {
+    var CW = 600, CH = 600;
+    var SCALE = 100;
+    var canvas = document.getElementById('c');
+    var ctx = canvas ? canvas.getContext('2d') : null;
+    var btns = document.getElementById('btns');
+    var clr = document.getElementById('clr');
+    var statusEl = document.getElementById('status');
+    if (!ctx || !btns) return;
+
+    function setStatus(msg) { if (statusEl) statusEl.textContent = msg; }
+
+    function drawEmpty() {
+      ctx.clearRect(0, 0, CW, CH);
+    }
+
+    var simpleLoopId = 0;
+    function simpleLoop() {
+      simpleLoopId = requestAnimationFrame(simpleLoop);
+      drawEmpty();
+      if (window.particleSandboxReady) cancelAnimationFrame(simpleLoopId);
+    }
+    simpleLoop();
+
+    // Buttons: use LiquidFun once Box2D.wasm is ready
+    ['Water', 'Oil', 'Elastic', 'Tensile', 'Flame', 'Add gel', 'Add noodle', 'Tornado'].forEach(function (label) {
+      var btn = document.createElement('button');
+      btn.textContent = label;
+      btn.onclick = function () {
+        if (!window.particleSandboxReady) return;
+        if (label === 'Water' && window.pourWater) window.pourWater();
+        else if (label === 'Oil' && window.pourOil) window.pourOil();
+        else if (label === 'Elastic' && window.addElastic) window.addElastic();
+        else if (label === 'Tensile' && window.addTensile) window.addTensile();
+        else if (label === 'Flame' && window.addFlame) window.addFlame();
+        else if (label === 'Add gel' && window.addGelBlob) window.addGelBlob();
+        else if (label === 'Add noodle' && window.addNoodle) window.addNoodle();
+        else if (label === 'Tornado' && window.startTornado) window.startTornado();
+      };
+      btns.appendChild(btn);
+    });
+
+    if (clr) clr.onclick = function () {
+      if (window.particleSandboxReady && window.clearContainer) window.clearContainer();
+    };
+
+    // LiquidFun init - run when Box2D.wasm is ready (async factory)
+    function initParticleSandbox() {
+      try {
+        var lf = window.liquidfun;
+        if (!lf || !lf.b2World || !lf.b2Vec2) {
+          setStatus('LiquidFun not ready (missing b2World/b2Vec2)');
+          return;
+        }
+        window.world = null;
+
+        var SCALE = 100;
+        var lastT = 0;
+        var halfW = (CW / SCALE) * 0.5;
+        var halfH = (CH / SCALE) * 0.5;
+
+        var gravity = new lf.b2Vec2(0, 10);
+        var world = new lf.b2World(gravity);
+        lf.destroy(gravity);
+        window.world = world;
+
+        var bodyDef = new lf.b2BodyDef();
+        bodyDef.set_type(lf.b2_staticBody);
+        var posVec = new lf.b2Vec2(halfW, halfH);
+        bodyDef.set_position(posVec);
+        bodyDef.set_angle(0);
+        lf.destroy(posVec);
+        var containerBody = world.CreateBody(bodyDef);
+        lf.destroy(bodyDef);
+
+        var filter = new lf.b2Filter();
+        filter.set_categoryBits(1);
+        filter.set_maskBits(65535);
+
+        function addEdge(ax, ay, bx, by) {
+          var edge = new lf.b2EdgeShape();
+          var v1 = new lf.b2Vec2(ax - halfW, ay - halfH);
+          var v2 = new lf.b2Vec2(bx - halfW, by - halfH);
+          edge.SetTwoSided(v1, v2);
+          var fd = new lf.b2FixtureDef();
+          fd.set_shape(edge);
+          fd.set_friction(0.3);
+          fd.set_restitution(0.1);
+          fd.set_density(0);
+          fd.set_filter(filter);
+          containerBody.CreateFixture(fd);
+          lf.destroy(v1);
+          lf.destroy(v2);
+          lf.destroy(edge);
+          lf.destroy(fd);
+        }
+        addEdge(0, CH / SCALE, CW / SCALE, CH / SCALE);
+        addEdge(CW / SCALE, 0, 0, 0);
+        addEdge(0, 0, 0, CH / SCALE);
+        addEdge(CW / SCALE, CH / SCALE, CW / SCALE, 0);
+        lf.destroy(filter);
+
+        var groundBodyDef = new lf.b2BodyDef();
+        groundBodyDef.set_type(lf.b2_staticBody);
+        var groundPos = new lf.b2Vec2(0, 0);
+        groundBodyDef.set_position(groundPos);
+        lf.destroy(groundPos);
+        var groundBody = world.CreateBody(groundBodyDef);
+        lf.destroy(groundBodyDef);
+
+        function makeFluidSystem() {
+          var psd = new lf.b2ParticleSystemDef();
+          psd.set_radius(0.018);
+          psd.set_dampingStrength(0.5);
+          psd.set_pressureStrength(0.2);
+          psd.set_viscousStrength(0.3);
+          psd.set_surfaceTensionNormalStrength(0.2);
+          psd.set_surfaceTensionPressureStrength(0.2);
+          psd.set_destroyByAge(false);
+          psd.set_maxCount(50000);
+          psd.set_colorMixingStrength(0.1);
+          psd.set_springStrength(0.25);
+          var sys = world.CreateParticleSystem(psd);
+          sys.SetRadius(0.018);
+          lf.destroy(psd);
+          return sys;
+        }
+
+        var waterSystem = makeFluidSystem();
+        var oilSystem = makeFluidSystem();
+        var elasticSystem = makeFluidSystem();
+        var tensileSystem = makeFluidSystem();
+        var gelSystem = makeFluidSystem();
+        var noodleSystem = makeFluidSystem();
+
+        var flamePsd = new lf.b2ParticleSystemDef();
+        flamePsd.set_radius(0.02);
+        flamePsd.set_dampingStrength(0.15);
+        flamePsd.set_destroyByAge(true);
+        flamePsd.set_lifetimeGranularity(1 / 60);
+        flamePsd.set_powderStrength(0.4);
+        flamePsd.set_colorMixingStrength(0.25);
+        flamePsd.set_maxCount(50000);
+        var flameSystem = world.CreateParticleSystem(flamePsd);
+        flameSystem.SetRadius(0.02);
+        lf.destroy(flamePsd);
+
+        var tornadoUntil = 0;
+        var vortexCenterX = halfW;
+        var vortexCenterY = halfH;
+
+        function applyTornadoToSystem(ps) {
+          var count = ps.GetParticleCount();
+          if (count === 0) return;
+          var posBuf = ps.GetPositionBuffer();
+          var posPtr = lf.getPointer(posBuf);
+          if (!posPtr) return;
+          var vecs = lf.reifyArray(posPtr, count, 8, lf.b2Vec2);
+          for (var i = 0; i < count; i++) {
+            var px = vecs[i].get_x();
+            var py = vecs[i].get_y();
+            if (px !== px || py !== py) continue;
+            var dx = px - vortexCenterX;
+            var dy = py - vortexCenterY;
+            var dist = Math.sqrt(dx * dx + dy * dy) + 0.02;
+            var invDist = 1 / dist;
+            var inward = -2.5 * invDist;
+            var tangent = 8.0 * invDist;
+            var fx = dx * inward - dy * tangent;
+            var fy = dy * inward + dx * tangent;
+            var force = new lf.b2Vec2(fx, fy);
+            ps.ParticleApplyForce(i, force);
+            lf.destroy(force);
+          }
+        }
+
+        function applyTornadoAll() {
+          applyTornadoToSystem(waterSystem);
+          applyTornadoToSystem(oilSystem);
+          applyTornadoToSystem(elasticSystem);
+          applyTornadoToSystem(tensileSystem);
+          applyTornadoToSystem(gelSystem);
+          applyTornadoToSystem(noodleSystem);
+          applyTornadoToSystem(flameSystem);
+        }
+
+        function startTornado() {
+          tornadoUntil = performance.now() + 4000;
+          setStatus('Tornado!');
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, 4100);
+        }
+
+        var ballRadius = 0.18;
+        var ballBodyDef = new lf.b2BodyDef();
+        ballBodyDef.set_type(lf.b2_dynamicBody);
+        var ballPos = new lf.b2Vec2(halfW, halfH);
+        ballBodyDef.set_position(ballPos);
+        ballBodyDef.set_angle(0);
+        lf.destroy(ballPos);
+        var ballBody = world.CreateBody(ballBodyDef);
+        lf.destroy(ballBodyDef);
+        var circle = new lf.b2CircleShape();
+        circle.set_m_radius(ballRadius);
+        var circleCenter = new lf.b2Vec2(0, 0);
+        circle.set_m_p(circleCenter);
+        var ballFd = new lf.b2FixtureDef();
+        ballFd.set_shape(circle);
+        ballFd.set_density(0.8);
+        ballFd.set_friction(0.4);
+        ballFd.set_restitution(0.3);
+        ballBody.CreateFixture(ballFd);
+        lf.destroy(circle);
+        lf.destroy(circleCenter);
+        lf.destroy(ballFd);
+
+        var mouseJoint = null;
+        var lastPointerWorld = null;
+
+        var ballMin = 0.25;
+        var ballMax = 5.75;
+
+        function clampBallToContainer() {
+          if (!ballBody) return;
+          var pos = ballBody.GetPosition();
+          var bx = pos.get_x();
+          var by = pos.get_y();
+          if (bx !== bx || by !== by) {
+            var c = new lf.b2Vec2(halfW, halfH);
+            var zero = new lf.b2Vec2(0, 0);
+            ballBody.SetTransform(c, 0);
+            ballBody.SetLinearVelocity(zero);
+            lf.destroy(c);
+            lf.destroy(zero);
+            return;
+          }
+          var nx = Math.max(ballMin, Math.min(ballMax, bx));
+          var ny = Math.max(ballMin, Math.min(ballMax, by));
+          if (nx !== bx || ny !== by) {
+            var p = new lf.b2Vec2(nx, ny);
+            ballBody.SetTransform(p, ballBody.GetAngle());
+            lf.destroy(p);
+          }
+        }
+
+        function resetBall() {
+          if (!ballBody) return;
+          if (mouseJoint) {
+            world.DestroyJoint(mouseJoint);
+            mouseJoint = null;
+            lastPointerWorld = null;
+          }
+          var c = new lf.b2Vec2(halfW, halfH);
+          var zero = new lf.b2Vec2(0, 0);
+          ballBody.SetTransform(c, 0);
+          ballBody.SetLinearVelocity(zero);
+          ballBody.SetAngularVelocity(0);
+          lf.destroy(c);
+          lf.destroy(zero);
+        }
+
+        function canvasToWorld(clientX, clientY) {
+          var rect = canvas.getBoundingClientRect();
+          var cx = (clientX - rect.left) * (canvas.width / rect.width);
+          var cy = (clientY - rect.top) * (canvas.height / rect.height);
+          return { x: cx / SCALE, y: cy / SCALE };
+        }
+
+        var ballHitRadius = ballRadius * 2.2;
+
+        function onPointerDown(e) {
+          if (!window.particleSandboxReady || !ballBody) return;
+          var w = canvasToWorld(e.clientX, e.clientY);
+          var pos = ballBody.GetPosition();
+          var bx = pos.get_x();
+          var by = pos.get_y();
+          var dx = w.x - bx;
+          var dy = w.y - by;
+          if (dx * dx + dy * dy < ballHitRadius * ballHitRadius) {
+            e.preventDefault();
+            e.currentTarget.setPointerCapture(e.pointerId);
+            if (mouseJoint) {
+              world.DestroyJoint(mouseJoint);
+              mouseJoint = null;
+            }
+            lastPointerWorld = { x: bx, y: by };
+            var mjd = new lf.b2MouseJointDef();
+            mjd.set_bodyA(groundBody);
+            mjd.set_bodyB(ballBody);
+            var target = new lf.b2Vec2(bx, by);
+            mjd.set_target(target);
+            mjd.set_maxForce(1200);
+            mjd.set_stiffness(80);
+            mjd.set_damping(10);
+            mouseJoint = world.CreateJoint(mjd);
+            lf.destroy(target);
+            lf.destroy(mjd);
+            var move = function (ev) {
+              if (mouseJoint) {
+                lastPointerWorld = canvasToWorld(ev.clientX, ev.clientY);
+              }
+            };
+            var up = function () {
+              try { canvas.releasePointerCapture(e.pointerId); } catch (err) {}
+              lastPointerWorld = null;
+              if (mouseJoint) {
+                world.DestroyJoint(mouseJoint);
+                mouseJoint = null;
+              }
+              canvas.removeEventListener('pointermove', move);
+              canvas.removeEventListener('pointerup', up);
+              canvas.removeEventListener('pointercancel', up);
+            };
+            canvas.addEventListener('pointermove', move);
+            canvas.addEventListener('pointerup', up);
+            canvas.addEventListener('pointercancel', up);
+          }
+        }
+        canvas.addEventListener('pointerdown', onPointerDown);
+
+        function pourWater() {
+          var pgd = new lf.b2ParticleGroupDef();
+          pgd.set_flags(lf.b2_waterParticle | lf.b2_colorMixingParticle);
+          var p = new lf.b2Vec2(0.2 + Math.random() * 5.6, 0.25);
+          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.5, 0.8 + Math.random() * 0.4);
+          var color = new lf.b2ParticleColor(0.55, 0.78, 1, 1);
+          var shape = new lf.b2CircleShape();
+          shape.set_m_radius(0.12);
+          var center = new lf.b2Vec2(0, 0);
+          shape.set_m_p(center);
+          pgd.set_position(p);
+          pgd.set_linearVelocity(v);
+          pgd.set_color(color);
+          pgd.set_shape(shape);
+          waterSystem.CreateParticleGroup(pgd);
+          lf.destroy(p);
+          lf.destroy(v);
+          lf.destroy(color);
+          lf.destroy(center);
+          lf.destroy(shape);
+          lf.destroy(pgd);
+          var n = waterSystem.GetParticleCount();
+          setStatus('Water added — ' + n + ' particles');
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, 1500);
+        }
+
+        function pourOil() {
+          var pgd = new lf.b2ParticleGroupDef();
+          pgd.set_flags(lf.b2_viscousParticle | lf.b2_colorMixingParticle);
+          var p = new lf.b2Vec2(0.2 + Math.random() * 5.6, 0.25);
+          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.3, 0.6 + Math.random() * 0.3);
+          var color = new lf.b2ParticleColor(1, 0.95, 0.25, 0.95);
+          var shape = new lf.b2CircleShape();
+          shape.set_m_radius(0.1);
+          var center = new lf.b2Vec2(0, 0);
+          shape.set_m_p(center);
+          pgd.set_position(p);
+          pgd.set_linearVelocity(v);
+          pgd.set_color(color);
+          pgd.set_shape(shape);
+          oilSystem.CreateParticleGroup(pgd);
+          lf.destroy(p);
+          lf.destroy(v);
+          lf.destroy(color);
+          lf.destroy(center);
+          lf.destroy(shape);
+          lf.destroy(pgd);
+          var n = oilSystem.GetParticleCount();
+          setStatus('Oil added — ' + n + ' fluid particles');
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, 1500);
+        }
+
+        function addElastic() {
+          var pgd = new lf.b2ParticleGroupDef();
+          pgd.set_flags(lf.b2_elasticParticle | lf.b2_colorMixingParticle);
+          var p = new lf.b2Vec2(0.2 + Math.random() * 5.6, 0.25);
+          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.4, 0.5 + Math.random() * 0.3);
+          var color = new lf.b2ParticleColor(0.6, 0.3, 0.85, 0.95);
+          var shape = new lf.b2CircleShape();
+          shape.set_m_radius(0.1);
+          var center = new lf.b2Vec2(0, 0);
+          shape.set_m_p(center);
+          pgd.set_position(p);
+          pgd.set_linearVelocity(v);
+          pgd.set_color(color);
+          pgd.set_shape(shape);
+          elasticSystem.CreateParticleGroup(pgd);
+          lf.destroy(p);
+          lf.destroy(v);
+          lf.destroy(color);
+          lf.destroy(center);
+          lf.destroy(shape);
+          lf.destroy(pgd);
+          var n = elasticSystem.GetParticleCount();
+          setStatus('Elastic (bouncy) added — ' + n + ' particles');
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, 1500);
+        }
+
+        function addTensile() {
+          var pgd = new lf.b2ParticleGroupDef();
+          pgd.set_flags(lf.b2_tensileParticle | lf.b2_colorMixingParticle);
+          var p = new lf.b2Vec2(0.2 + Math.random() * 5.6, 0.25);
+          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.35, 0.5 + Math.random() * 0.3);
+          var color = new lf.b2ParticleColor(0.55, 0.38, 0.22, 0.92);
+          var shape = new lf.b2CircleShape();
+          shape.set_m_radius(0.1);
+          var center = new lf.b2Vec2(0, 0);
+          shape.set_m_p(center);
+          pgd.set_position(p);
+          pgd.set_linearVelocity(v);
+          pgd.set_color(color);
+          pgd.set_shape(shape);
+          tensileSystem.CreateParticleGroup(pgd);
+          lf.destroy(p);
+          lf.destroy(v);
+          lf.destroy(color);
+          lf.destroy(center);
+          lf.destroy(shape);
+          lf.destroy(pgd);
+          var n = tensileSystem.GetParticleCount();
+          setStatus('Tensile (surface tension) added — ' + n + ' particles');
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, 1500);
+        }
+
+        function addFlame() {
+          var pgd = new lf.b2ParticleGroupDef();
+          pgd.set_flags(lf.b2_powderParticle | lf.b2_colorMixingParticle);
+          pgd.set_lifetime(0.6 + Math.random() * 0.5);
+          var p = new lf.b2Vec2(0.2 + Math.random() * 5.6, 0.3);
+          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.6, -1.0 - Math.random() * 1.0);
+          var r = 0.98;
+          var g = 0.25 + Math.random() * 0.2;
+          var b = 0.02 + Math.random() * 0.06;
+          var color = new lf.b2ParticleColor(r, g, b, 0.92);
+          var shape = new lf.b2CircleShape();
+          shape.set_m_radius(0.06);
+          var center = new lf.b2Vec2(0, 0);
+          shape.set_m_p(center);
+          pgd.set_position(p);
+          pgd.set_linearVelocity(v);
+          pgd.set_color(color);
+          pgd.set_shape(shape);
+          flameSystem.CreateParticleGroup(pgd);
+          lf.destroy(p);
+          lf.destroy(v);
+          lf.destroy(color);
+          lf.destroy(center);
+          lf.destroy(shape);
+          lf.destroy(pgd);
+          var n = flameSystem.GetParticleCount();
+          setStatus('Flame added — ' + n + ' particles');
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, 1500);
+        }
+
+        function addGelBlob() {
+          var pgd = new lf.b2ParticleGroupDef();
+          pgd.set_flags(lf.b2_elasticParticle | lf.b2_tensileParticle | lf.b2_colorMixingParticle);
+          var radius = 0.08 + Math.random() * 0.12;
+          var px = 0.5 + Math.random() * 5;
+          var py = 0.5 + Math.random() * 5;
+          var p = new lf.b2Vec2(px, py);
+          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.2, (Math.random() - 0.5) * 0.2);
+          var jellyColors = [
+            [0.92, 0.2, 0.2, 0.92],
+            [0.88, 0.15, 0.15, 0.92],
+            [0.95, 0.25, 0.25, 0.92],
+            [0.9, 0.18, 0.18, 0.92],
+            [0.85, 0.12, 0.12, 0.92],
+            [0.93, 0.22, 0.22, 0.92]
+          ];
+          var c = jellyColors[Math.floor(Math.random() * jellyColors.length)];
+          var color = new lf.b2ParticleColor(c[0] + (Math.random() - 0.5) * 0.1, c[1] + (Math.random() - 0.5) * 0.1, c[2] + (Math.random() - 0.5) * 0.1, c[3]);
+          var shape = new lf.b2CircleShape();
+          shape.set_m_radius(radius);
+          var center = new lf.b2Vec2(0, 0);
+          shape.set_m_p(center);
+          pgd.set_position(p);
+          pgd.set_linearVelocity(v);
+          pgd.set_color(color);
+          pgd.set_shape(shape);
+          gelSystem.CreateParticleGroup(pgd);
+          lf.destroy(p);
+          lf.destroy(v);
+          lf.destroy(color);
+          lf.destroy(center);
+          lf.destroy(shape);
+          lf.destroy(pgd);
+          var n = gelSystem.GetParticleCount();
+          setStatus('Gel blob added — ' + n + ' particles');
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, 1500);
+        }
+
+        function addNoodle() {
+          var pgd = new lf.b2ParticleGroupDef();
+          pgd.set_flags(lf.b2_springParticle | lf.b2_colorMixingParticle);
+          var len = 0.2 + Math.random() * 0.25;
+          var thick = 0.052 + Math.random() * 0.01;
+          var px = 0.8 + Math.random() * 4.4;
+          var py = 0.5 + Math.random() * 2;
+          var p = new lf.b2Vec2(px, py);
+          var angle = (Math.random() - 0.5) * Math.PI * 0.7;
+          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.1, (Math.random() - 0.5) * 0.1);
+          var r = 0.96 + Math.random() * 0.04;
+          var g = 0.96 + Math.random() * 0.04;
+          var b = 0.96 + Math.random() * 0.04;
+          var color = new lf.b2ParticleColor(r, g, b, 0.95);
+          var poly = new lf.b2PolygonShape();
+          poly.SetAsBox(len, thick);
+          pgd.set_position(p);
+          pgd.set_angle(angle);
+          pgd.set_linearVelocity(v);
+          pgd.set_color(color);
+          pgd.set_shape(poly);
+          noodleSystem.CreateParticleGroup(pgd);
+          lf.destroy(p);
+          lf.destroy(v);
+          lf.destroy(color);
+          lf.destroy(poly);
+          lf.destroy(pgd);
+          var n = noodleSystem.GetParticleCount();
+          setStatus('Noodle added — ' + n + ' particles');
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, 1500);
+        }
+
+        function drawParticles(ps, defaultColor, opts) {
+          var count = ps.GetParticleCount();
+          if (count === 0) return;
+          var posBuf = ps.GetPositionBuffer();
+          var posPtr = lf.getPointer(posBuf);
+          if (!posPtr) return;
+          var radius = (ps.GetRadius && ps.GetRadius()) || 0.02;
+          var pixelRadius = Math.max(2, radius * SCALE);
+          var stride = 8;
+          var vecs = lf.reifyArray(posPtr, count, stride, lf.b2Vec2);
+          var useLifetimeFade = opts && opts.lifetimeFade;
+          var maxLifetime = (opts && opts.maxLifetime) || 1.2;
+          var useColorBuffer = opts && opts.useColorBuffer;
+          var colorPtr = useColorBuffer ? lf.getPointer(ps.GetColorBuffer()) : 0;
+          var HEAPU8 = colorPtr ? lf.HEAPU8 : null;
+          var colorStride = 4;
+          var colors = (useColorBuffer && colorPtr && lf.reifyArray) ? lf.reifyArray(colorPtr, count, colorStride, lf.b2ParticleColor) : null;
+          for (var i = 0; i < count; i++) {
+            var x = vecs[i].get_x() * SCALE;
+            var y = vecs[i].get_y() * SCALE;
+            if (x !== x || y !== y) continue;
+            var alpha = 1;
+            if (useLifetimeFade && ps.GetParticleLifetime) {
+              try {
+                var life = ps.GetParticleLifetime(i);
+                alpha = Math.max(0.12, Math.min(1, life / maxLifetime));
+              } catch (e) {}
+            }
+            if (useColorBuffer && (colors || HEAPU8)) {
+              var r, g, b, a;
+              if (colors && colors[i]) {
+                r = colors[i].get_r();
+                g = colors[i].get_g();
+                b = colors[i].get_b();
+                a = colors[i].get_a();
+                if (r > 1 || g > 1 || b > 1) { r /= 255; g /= 255; b /= 255; a = (a > 1 ? a / 255 : a); }
+              } else if (HEAPU8 && colorPtr) {
+                var base = colorPtr + i * 4;
+                r = HEAPU8[base] / 255;
+                g = HEAPU8[base + 1] / 255;
+                b = HEAPU8[base + 2] / 255;
+                a = HEAPU8[base + 3] / 255;
+              } else {
+                r = g = b = a = 0;
+              }
+              a *= alpha;
+              if (r + g + b > 0.01 && a > 0.05) {
+                ctx.fillStyle = 'rgba(' + Math.round(r * 255) + ',' + Math.round(g * 255) + ',' + Math.round(b * 255) + ',' + a.toFixed(2) + ')';
+              } else {
+                ctx.fillStyle = defaultColor || 'rgba(100,180,255,0.9)';
+                if (alpha < 1 && typeof defaultColor === 'string') {
+                  var aMatch = defaultColor.match(/[\d.]+\)$/);
+                  if (aMatch) ctx.fillStyle = defaultColor.replace(/[\d.]+\)$/, (parseFloat(aMatch[0].slice(0, -1)) * alpha).toFixed(2) + ')');
+                }
+              }
+            } else {
+              ctx.fillStyle = defaultColor || 'rgba(100,180,255,0.9)';
+              if (typeof defaultColor === 'string' && alpha < 1) {
+                var aMatch = defaultColor.match(/[\d.]+\)$/);
+                if (aMatch) {
+                  var baseAlpha = parseFloat(aMatch[0].slice(0, -1));
+                  ctx.fillStyle = defaultColor.replace(/[\d.]+\)$/, (baseAlpha * alpha).toFixed(2) + ')');
+                }
+              }
+            }
+            ctx.beginPath();
+            ctx.arc(x, y, pixelRadius, 0, Math.PI * 2);
+            ctx.fill();
+          }
+        }
+
+        var particleIterations = world.CalculateReasonableParticleIterations(1 / 60);
+
+        function physicsLoop(now) {
+          requestAnimationFrame(physicsLoop);
+          if (!ctx) return;
+          var dt = Math.min(((now - lastT) / 1000) || 1/60, 1/10);
+          lastT = now;
+
+          if (mouseJoint && lastPointerWorld) {
+            var t = new lf.b2Vec2(lastPointerWorld.x, lastPointerWorld.y);
+            mouseJoint.SetTarget(t);
+            lf.destroy(t);
+          }
+
+          var steps = Math.max(1, Math.ceil(dt / (1/60)));
+          for (var s = 0; s < steps; s++) {
+            if (now < tornadoUntil) applyTornadoAll();
+            world.Step(1/60, 8, 3, particleIterations);
+          }
+
+          clampBallToContainer();
+
+          ctx.clearRect(0, 0, CW, CH);
+          ctx.strokeStyle = '#333';
+          ctx.lineWidth = 2;
+          ctx.strokeRect(1, 1, CW - 2, CH - 2);
+          drawParticles(waterSystem, 'rgba(140,200,255,0.95)');
+          drawParticles(oilSystem, 'rgba(255,242,64,0.95)');
+          drawParticles(elasticSystem, 'rgba(153,77,217,0.95)');
+          drawParticles(tensileSystem, 'rgba(140,97,56,0.92)');
+          drawParticles(gelSystem, 'rgba(235,64,52,0.92)');
+          drawParticles(noodleSystem, 'rgba(250,250,250,0.95)');
+          drawParticles(flameSystem, 'rgba(255,180,60,0.92)');
+
+          if (now < tornadoUntil) {
+            var cx = vortexCenterX * SCALE;
+            var cy = vortexCenterY * SCALE;
+            var pulse = 0.6 + 0.2 * Math.sin(now * 0.01);
+            ctx.save();
+            ctx.globalAlpha = 0.25 * pulse;
+            ctx.strokeStyle = '#aaa';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            for (var r = 20; r < 220; r += 12) {
+              var a = (now * 0.003) * (r / 80);
+              var x = cx + Math.cos(a) * r;
+              var y = cy + Math.sin(a) * r;
+              if (r === 20) ctx.moveTo(x, y);
+              else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+            ctx.restore();
+          }
+
+          if (ballBody) {
+            var pos = ballBody.GetPosition();
+            var bx = pos.get_x() * SCALE;
+            var by = pos.get_y() * SCALE;
+            ctx.fillStyle = '#555';
+            ctx.strokeStyle = '#777';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.arc(bx, by, ballRadius * SCALE, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+          }
+        }
+
+        window.pourWater = pourWater;
+        window.pourOil = pourOil;
+        window.addElastic = addElastic;
+        window.addTensile = addTensile;
+        window.addFlame = addFlame;
+        window.addGelBlob = addGelBlob;
+        window.addNoodle = addNoodle;
+        window.clearContainer = function () {
+          if (mouseJoint) {
+            world.DestroyJoint(mouseJoint);
+            mouseJoint = null;
+            lastPointerWorld = null;
+          }
+          resetBall();
+          world.DestroyParticleSystem(waterSystem);
+          world.DestroyParticleSystem(oilSystem);
+          world.DestroyParticleSystem(elasticSystem);
+          world.DestroyParticleSystem(tensileSystem);
+          world.DestroyParticleSystem(gelSystem);
+          world.DestroyParticleSystem(noodleSystem);
+          world.DestroyParticleSystem(flameSystem);
+          waterSystem = makeFluidSystem();
+          oilSystem = makeFluidSystem();
+          elasticSystem = makeFluidSystem();
+          tensileSystem = makeFluidSystem();
+          gelSystem = makeFluidSystem();
+          noodleSystem = makeFluidSystem();
+          var fpsd = new lf.b2ParticleSystemDef();
+          fpsd.set_radius(0.02);
+          fpsd.set_dampingStrength(0.15);
+          fpsd.set_destroyByAge(true);
+          fpsd.set_lifetimeGranularity(1 / 60);
+          fpsd.set_powderStrength(0.4);
+          fpsd.set_colorMixingStrength(0.25);
+          fpsd.set_maxCount(50000);
+          flameSystem = world.CreateParticleSystem(fpsd);
+          flameSystem.SetRadius(0.02);
+          lf.destroy(fpsd);
+        };
+        window.particleSandboxReady = true;
+        lastT = performance.now();
+        requestAnimationFrame(physicsLoop);
+        setStatus('Ready — add particles or gel');
+      } catch (e) {
+        setStatus('Init failed: ' + (e && e.message ? e.message : String(e)));
+        console.error('LiquidFun init failed', e);
+      }
+    }
+
+    // Load Box2D.wasm via factory and run init when ready
+    Box2DFactory({ locateFile: function (path) { return path === 'Box2D.wasm' ? '/Box2D.wasm' : path; } })
+      .then(function (box2d) {
+        window.liquidfun = box2d;
+        if (!window.particleSandboxReady) initParticleSandbox();
+      })
+      .catch(function (e) {
+        var msg = e && e.message ? e.message : String(e);
+        setStatus('Box2D load failed: ' + msg);
+        console.error('Box2D.wasm init failed', e);
+      });
+  })();
+  </script>
+</body>
+</html>

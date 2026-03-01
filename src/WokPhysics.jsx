@@ -28,6 +28,55 @@ const getBounciness = (f) => {
   return 0.35;
 };
 
+// Wok boundary: cooking surface = inner radius (no innerR-8 for floor/wall)
+const WOK_RADIUS = 140;
+const COOKING_RADIUS = WOK_RADIUS - 14; // innerRadius = cooking surface
+
+// Substepping for stable physics
+const MAX_DT_PER_STEP = 0.25;
+
+// Shape-based hitbox helpers (uses f.size, f.w/f.h, or f.nodes)
+function bodyHalfExtentLy(f, wokAa) {
+  if (f.nodes) return f.nodeRadius;
+  const angle = wokAa - (f.rotation ?? f.rot ?? 0);
+  const s = Math.sin(angle), c = Math.cos(angle);
+  if (f.w != null && f.h != null) return (f.w / 2) * Math.abs(s) + (f.h / 2) * Math.abs(c);
+  return (f.size ?? 0) / 2;
+}
+
+function bodyCollisionRadius(f) {
+  if (f.nodes) return f.nodeRadius;
+  if (f.w != null && f.h != null) return Math.sqrt((f.w / 2) ** 2 + (f.h / 2) ** 2);
+  return (f.size ?? 0) / 2;
+}
+
+function getBodyPoints(f) {
+  if (f.nodes) {
+    return f.nodes.map((n) => ({
+      get x() { return n.x; },
+      get y() { return n.y; },
+      r: f.nodeRadius,
+      add(dx, dy) { n.x += dx; n.y += dy; },
+    }));
+  }
+  const r = bodyCollisionRadius(f);
+  return [{
+    get x() { return f.x; },
+    get y() { return f.y; },
+    r,
+    add(dx, dy) { f.x += dx; f.y += dy; },
+  }];
+}
+
+// Segmented config for noodle/shrimp (multi-node chains)
+const SEGMENTED_CONFIG = {
+  noodle: { nodeCount: 5, segmentLength: 12, nodeRadius: 5 },
+  shrimp: { nodeCount: 4, segmentLength: 10, nodeRadius: 6 },
+};
+
+// Cache-busting for ingredient SVGs (append ?v=SVG_VERSION to any ingredient image/SVG URLs)
+const SVG_VERSION = 2;
+
 // Performance: when food body count exceeds this, reduce particles/collision to keep 60fps
 const BODY_COUNT_PERF_THRESHOLD = 14;
 const MAX_COLLISION_PAIRS_PER_FRAME = 90;
@@ -132,8 +181,8 @@ const WokPhysics = forwardRef(function WokPhysics(
 
     const wokCenterX = CW / 2;
     const wokCenterY = CH / 2 + 30;
-    const wokRadius = 140;
-    const innerRadius = wokRadius - 16;
+    const wokRadius = WOK_RADIUS;
+    const innerRadius = COOKING_RADIUS; // cooking surface = wall (no innerR-8)
 
     let metalTemp = 0;
     let lastTime = performance.now();
@@ -201,14 +250,20 @@ const WokPhysics = forwardRef(function WokPhysics(
         playTossShhh();
 
         s.foodBodies.forEach(f => {
+          let px = f.x, py = f.y, sz = f.size * 0.4;
+          if (f.nodes) {
+            const mid = f.nodes[Math.floor(f.nodes.length / 2)];
+            px = mid.x; py = mid.y;
+            sz = (f.nodeRadius ?? 6) * 2;
+          }
           s.particles.push({
             type: 'splash',
             color: 'rgba(80, 60, 40, 0.7)',
-            x: f.x, y: f.y,
+            x: px, y: py,
             vx: 20 + Math.random() * 25,
             vy: -12 - Math.random() * 18,
             life: 1, maxLife: 35 + Math.random() * 20,
-            size: f.size * 0.4 + Math.random() * 3,
+            size: sz + Math.random() * 3,
           });
         });
         s.foodBodies = [];
@@ -258,15 +313,23 @@ const WokPhysics = forwardRef(function WokPhysics(
               const f = s.foodBodies.pop();
               const tx = sa.plateTargetX + (Math.random() - 0.5) * 50;
               const ty = plateTopY - 5 - Math.random() * 15;
+              let sx = f.x, sy = f.y;
+              if (f.nodes) {
+                const mid = Math.floor(f.nodes.length / 2);
+                const n0 = f.nodes[0], nL = f.nodes[f.nodes.length - 1];
+                sx = (n0.x + nL.x) / 2;
+                sy = (n0.y + nL.y) / 2;
+              }
               sa.servedFood.push({
                 ...f,
+                x: sx, y: sy,
                 landed: false,
                 targetX: tx,
                 targetY: ty,
               });
               for (let j = 0; j < 2; j++) {
                 sa.sparkles.push({
-                  x: f.x, y: f.y,
+                  x: sx, y: sy,
                   vx: 3 + Math.random() * 8,
                   vy: -5 - Math.random() * 6,
                   life: 0, maxLife: 15 + Math.random() * 10,
@@ -418,11 +481,31 @@ const WokPhysics = forwardRef(function WokPhysics(
           const pc = 10;
           for (let i = 0; i < pc; i++) s.foodBodies.push({ type: 'char_siu', id: newIngId, instanceId: instId, pCount: pc, w: 18 + Math.random() * 8, h: 14 + Math.random() * 6, x: currentWokX + (Math.random() - 0.5) * scatterX, y: spawnY - Math.random() * 60, vx: (Math.random() - 0.5) * scatterVx, vy: dropVy + (Math.random() - 0.5) * 2, rotation: Math.random() * Math.PI, rotSpeed: (Math.random() - 0.5) * 0.3, size: 18 });
         } else if (newIngId === 'noodle') {
-          const pc = 12;
-          for (let i = 0; i < pc; i++) s.foodBodies.push({ type: 'noodle', id: newIngId, instanceId: instId, pCount: pc, w: 55 + Math.random() * 35, h: 5 + Math.random() * 4, x: currentWokX + (Math.random() - 0.5) * scatterX, y: spawnY - Math.random() * 60, vx: (Math.random() - 0.5) * scatterVx, vy: dropVy + (Math.random() - 0.5) * 2, rotation: Math.random() * Math.PI, rotSpeed: (Math.random() - 0.5) * 0.15, size: 26, wavePhase: Math.random() * Math.PI * 2, waveAmp: 0.3 + Math.random() * 0.4 });
+          const cfg = SEGMENTED_CONFIG.noodle;
+          const baseX = currentWokX + (Math.random() - 0.5) * scatterX;
+          const nodes = [];
+          for (let n = 0; n < cfg.nodeCount; n++) {
+            nodes.push({
+              x: baseX + (Math.random() - 0.5) * 6,
+              y: spawnY + n * cfg.segmentLength * 0.9,
+              vx: (Math.random() - 0.5) * 6,
+              vy: dropVy + (Math.random() - 0.5) * 2,
+            });
+          }
+          s.foodBodies.push({ type: 'noodle', id: newIngId, instanceId: instId, pCount: 1, shape: 'segmented', nodes, segmentLength: cfg.segmentLength, nodeRadius: cfg.nodeRadius, spilled: false });
         } else if (newIngId === 'shrimp') {
-          const pc = 7;
-          for (let i = 0; i < pc; i++) s.foodBodies.push({ type: 'shrimp', id: newIngId, instanceId: instId, pCount: pc, x: currentWokX + (Math.random() - 0.5) * scatterX, y: spawnY - Math.random() * 60, vx: (Math.random() - 0.5) * scatterVx, vy: dropVy + (Math.random() - 0.5) * 2, rotation: Math.random() * Math.PI, rotSpeed: (Math.random() - 0.5) * 0.35, size: 14 + Math.random() * 4, bend: 0 });
+          const cfg = SEGMENTED_CONFIG.shrimp;
+          const baseX = currentWokX + (Math.random() - 0.5) * scatterX;
+          const nodes = [];
+          for (let n = 0; n < cfg.nodeCount; n++) {
+            nodes.push({
+              x: baseX + (Math.random() - 0.5) * 6,
+              y: spawnY + n * cfg.segmentLength * 0.9,
+              vx: (Math.random() - 0.5) * 6,
+              vy: dropVy + (Math.random() - 0.5) * 2,
+            });
+          }
+          s.foodBodies.push({ type: 'shrimp', id: newIngId, instanceId: instId, pCount: 1, shape: 'segmented', nodes, segmentLength: cfg.segmentLength, nodeRadius: cfg.nodeRadius, spilled: false });
         } else if (newIngId === 'gai_lan') {
           const pc = 10;
           for (let i = 0; i < pc; i++) s.foodBodies.push({ type: 'gai_lan', id: newIngId, instanceId: instId, pCount: pc, w: 12 + Math.random() * 8, h: 25 + Math.random() * 10, x: currentWokX + (Math.random() - 0.5) * scatterX, y: spawnY - Math.random() * 60, vx: (Math.random() - 0.5) * scatterVx, vy: dropVy + (Math.random() - 0.5) * 2, rotation: Math.random() * Math.PI, rotSpeed: (Math.random() - 0.5) * 0.4, size: 24 });
@@ -450,40 +533,103 @@ const WokPhysics = forwardRef(function WokPhysics(
       }
 
       // ==========================================
-      // PHYSICS: GRAVITY, COLLISION & OVERLAPS
+      // PHYSICS: SUBSTEPPED (max 0.25 per step)
       // ==========================================
-      s.foodBodies.forEach(f => {
-        const mass = getMass(f);
-        f.vy += (0.8 + 0.08 * mass) * dt;
-
-        if (f.type === 'noodle') {
-          f.wavePhase = (f.wavePhase || 0) + dt * (2 + Math.abs(f.vx + f.vy) * 0.3);
-        }
-        if (f.type === 'shrimp') {
-          const speed = Math.sqrt(f.vx * f.vx + f.vy * f.vy);
-          const targetBend = Math.max(-0.4, Math.min(0.4, (f.vx - f.vy) * 0.04));
-          f.bend = (f.bend || 0) + (targetBend - (f.bend || 0)) * 0.15 * dt;
-        }
-
-        if (!isTossingGlobal) {
-          if (Math.abs(f.vx) < 0.15) f.vx *= 0.9;
-          if (Math.abs(f.vy) < 0.15 && f.y > currentWokY) f.vy *= 0.9;
-        }
-
-        f.x += f.vx * dt;
-        f.y += f.vy * dt;
-        f.rotation += f.rotSpeed * dt;
-      });
-
-      // Wok collisions
+      const maxDtPerStep = MAX_DT_PER_STEP;
+      const steps = Math.max(1, Math.ceil(dt / maxDtPerStep));
+      const stepDt = dt / steps;
+      const cosA = Math.cos(wokAnimAngle);
+      const sinA = Math.sin(wokAnimAngle);
+      const wall = innerRadius; // cooking surface = wall (no innerR-8)
       let impactsPlayedThisFrame = 0;
-      s.foodBodies.forEach(f => {
-        const dx = f.x - currentWokX;
-        const mass = getMass(f);
-        const bounciness = getBounciness(f);
 
-        if (!f.spilled) {
-          if (Math.abs(dx) > innerRadius + 5 && f.y > currentWokY - 5) {
+      for (let physicsStep = 0; physicsStep < steps; physicsStep++) {
+        const sdt = stepDt;
+
+        s.foodBodies.forEach((f) => {
+          if (f.nodes) {
+            // --- Segmented (noodle/shrimp) ---
+            f.nodes.forEach((n) => {
+              n.vy += 0.96 * sdt * 0.45;
+              n.x += n.vx * sdt;
+              n.y += n.vy * sdt;
+              let lx = (n.x - currentWokX) * cosA + (n.y - currentWokY) * sinA;
+              let ly = -(n.x - currentWokX) * sinA + (n.y - currentWokY) * cosA;
+              if (lx * lx + ly * ly > (innerRadius + 5) * (innerRadius + 5) && ly > -20) f.spilled = true;
+              const clampLx = Math.max(-wall, Math.min(wall, lx));
+              let floorLy = Math.sqrt(innerRadius * innerRadius - clampLx * clampLx) - f.nodeRadius;
+              if (ly >= floorLy) {
+                n.vy *= isTossingGlobal ? -0.5 : 0;
+                n.vx *= isTossingGlobal ? 0.95 : 0;
+                if (isTossingGlobal) {
+                  n.vx += Math.max(-18, Math.min(18, wokVx)) * 0.2;
+                  n.vy += Math.max(-18, Math.min(18, wokVy)) * 0.35;
+                  n.vx += Math.sin(wokAnimAngle) * 2;
+                }
+                ly = floorLy;
+                n.x = currentWokX + clampLx * cosA - ly * sinA;
+                n.y = currentWokY + clampLx * sinA + ly * cosA;
+              }
+              if (ly > floorLy) {
+                ly = floorLy;
+                n.x = currentWokX + clampLx * cosA - ly * sinA;
+                n.y = currentWokY + clampLx * sinA + ly * cosA;
+                n.vy *= 0.3;
+                n.vx *= 0.7;
+              }
+            });
+            for (let iter = 0; iter < 3; iter++) {
+              for (let i = 0; i < f.nodes.length - 1; i++) {
+                const a = f.nodes[i], b = f.nodes[i + 1];
+                let dx = b.x - a.x, dy = b.y - a.y;
+                const d = Math.sqrt(dx * dx + dy * dy) || 0.001;
+                const diff = d - f.segmentLength;
+                const half = diff * 0.5;
+                const nx = dx / d, ny = dy / d;
+                a.x += nx * half;
+                a.y += ny * half;
+                b.x -= nx * half;
+                b.y -= ny * half;
+              }
+            }
+            f.nodes.forEach((n) => {
+              let lx = (n.x - currentWokX) * cosA + (n.y - currentWokY) * sinA;
+              let ly = -(n.x - currentWokX) * sinA + (n.y - currentWokY) * cosA;
+              const clampLx = Math.max(-wall, Math.min(wall, lx));
+              const floorLy = Math.sqrt(innerRadius * innerRadius - clampLx * clampLx) - f.nodeRadius;
+              if (ly > floorLy) {
+                ly = floorLy;
+                n.x = currentWokX + clampLx * cosA - ly * sinA;
+                n.y = currentWokY + clampLx * sinA + ly * cosA;
+              }
+            });
+            f.nodes.forEach((n) => {
+              const lx = (n.x - currentWokX) * cosA + (n.y - currentWokY) * sinA;
+              const ly = -(n.x - currentWokX) * sinA + (n.y - currentWokY) * cosA;
+              const clampLx = Math.max(-wall, Math.min(wall, lx));
+              const floorLy = Math.sqrt(innerRadius * innerRadius - clampLx * clampLx) - f.nodeRadius;
+              const onFloor = ly >= floorLy - 2;
+              if (onFloor && !isTossingGlobal) {
+                n.vx = 0;
+                n.vy = 0;
+              } else {
+                n.vx *= 0.98;
+                n.vy *= 0.98;
+              }
+            });
+            return;
+          }
+
+          // --- Non-segmented body ---
+          const mass = getMass(f);
+          f.vy += (0.8 + 0.08 * mass) * sdt * 0.45;
+          f.x += f.vx * sdt;
+          f.y += f.vy * sdt;
+          f.rotation = (f.rotation ?? 0) + (f.rotSpeed ?? 0) * sdt;
+
+          const lx = (f.x - currentWokX) * cosA + (f.y - currentWokY) * sinA;
+          let ly = -(f.x - currentWokX) * sinA + (f.y - currentWokY) * cosA;
+          if (!f.spilled && lx * lx + ly * ly > (innerRadius + 5) * (innerRadius + 5) && ly > -20) {
             f.spilled = true;
             const isFirstForInstance = f.instanceId && !spilledInstancesRef.current.has(f.instanceId);
             if (isFirstForInstance) {
@@ -492,115 +638,243 @@ const WokPhysics = forwardRef(function WokPhysics(
             }
             onSpillRef.current?.(f.id, f.instanceId, f.pCount || 1, isFirstForInstance);
           }
+
+          if (!f.spilled) {
+            const halfExt = bodyHalfExtentLy(f, wokAnimAngle);
+            const clampLx = Math.max(-wall, Math.min(wall, lx));
+            let floorLy = Math.sqrt(innerRadius * innerRadius - clampLx * clampLx) - halfExt;
+            const onFloor = ly >= floorLy;
+
+            if (onFloor) {
+              if (f.vy > 3 && impactsPlayedThisFrame < 2) {
+                playFoodImpact();
+                impactsPlayedThisFrame++;
+              }
+              ly = floorLy;
+              const bounciness = getBounciness(f);
+              if (isTossingGlobal) {
+                f.vy *= -bounciness * 0.55;
+                f.vx *= 0.97;
+                f.vx -= (clampLx / (innerRadius - 5)) * (0.6 / mass);
+                f.vx += Math.max(-18, Math.min(18, wokVx)) * (0.32 / mass);
+                f.vy += Math.max(-18, Math.min(18, wokVy)) * 0.52;
+                f.vx += Math.sin(wokAnimAngle) * (3.2 / mass);
+                f.rotSpeed = (f.rotSpeed ?? 0) * 0.8 + (Math.random() - 0.5) * 0.35;
+              } else {
+                f.vy = 0;
+                f.vx *= 0.35;
+                f.rotSpeed = (f.rotSpeed ?? 0) * 0;
+              }
+              const clampLx2 = Math.max(-wall, Math.min(wall, clampLx + (f.pileSkew ?? 0) * 0.4));
+              floorLy = Math.sqrt(innerRadius * innerRadius - clampLx2 * clampLx2) - bodyHalfExtentLy(f, wokAnimAngle);
+              ly = floorLy;
+              f.x = currentWokX + clampLx2 * cosA - ly * sinA;
+              f.y = currentWokY + clampLx2 * sinA + ly * cosA;
+            } else {
+              f.rotation = (f.rotation ?? 0) + (f.rotSpeed ?? 0) * sdt;
+              if (ly > -120) {
+                if (lx < -wall) {
+                  f.x = currentWokX - wall * cosA - ly * sinA;
+                  f.y = currentWokY - wall * sinA + ly * cosA;
+                  f.vx *= -0.5;
+                } else if (lx > wall) {
+                  f.x = currentWokX + wall * cosA - ly * sinA;
+                  f.y = currentWokY + wall * sinA + ly * cosA;
+                  f.vx *= -0.5;
+                }
+              }
+              // In-air: never fall through floor
+              const checkLx = (f.x - currentWokX) * cosA + (f.y - currentWokY) * sinA;
+              const checkLy = -(f.x - currentWokX) * sinA + (f.y - currentWokY) * cosA;
+              const checkClamp = Math.max(-wall, Math.min(wall, checkLx));
+              const checkFloor = Math.sqrt(innerRadius * innerRadius - checkClamp * checkClamp) - bodyHalfExtentLy(f, wokAnimAngle);
+              if (checkLy > checkFloor) {
+                ly = checkFloor;
+                f.x = currentWokX + checkClamp * cosA - ly * sinA;
+                f.y = currentWokY + checkClamp * sinA + ly * cosA;
+                f.vy *= 0.3;
+                f.vx *= 0.6;
+              }
+            }
+          } else {
+            f.rotation = (f.rotation ?? 0) + (f.rotSpeed ?? 0) * sdt;
+          }
+        });
+
+        s.foodBodies = s.foodBodies.filter((f) => {
+          if (f.nodes) {
+            const mid = f.nodes[Math.floor(f.nodes.length / 2)];
+            return mid && mid.y < CH + 100;
+          }
+          return f.y < CH + 100;
+        });
+
+        // Body-body collision (shape-based via getBodyPoints)
+        const highLoadStep = s.foodBodies.length > BODY_COUNT_PERF_THRESHOLD;
+        const collisionSteps = highLoadStep ? 1 : 2;
+        const maxPairs = highLoadStep ? MAX_COLLISION_PAIRS_PER_FRAME : Infinity;
+        let pairCount = 0;
+        for (let cs = 0; cs < collisionSteps; cs++) {
+          if (highLoadStep) pairCount = 0;
+          for (let i = 0; i < s.foodBodies.length; i++) {
+            if (highLoadStep && pairCount >= maxPairs) break;
+            for (let j = i + 1; j < s.foodBodies.length; j++) {
+              if (highLoadStep && pairCount >= maxPairs) break;
+              pairCount++;
+              const a = s.foodBodies[i], b = s.foodBodies[j];
+              const pa = getBodyPoints(a), pb = getBodyPoints(b);
+              for (let pi = 0; pi < pa.length; pi++) {
+                for (let pj = 0; pj < pb.length; pj++) {
+                  const na = pa[pi], nb = pb[pj];
+                  const ddx = nb.x - na.x, ddy = nb.y - na.y, d2 = ddx * ddx + ddy * ddy;
+                  const minD = (na.r + nb.r) * 0.5;
+                  if (d2 < minD * minD && d2 > 0.01) {
+                    const d = Math.sqrt(d2), nx = ddx / d, ny = ddy / d, ov = (minD - d) * 0.08;
+                    na.add(-nx * ov, -ny * ov);
+                    nb.add(nx * ov, ny * ov);
+                  }
+                }
+              }
+            }
+          }
         }
 
-        if (!f.spilled) {
-          const maxDx = innerRadius - 5;
-          const clampedDx = Math.max(-maxDx, Math.min(maxDx, dx));
-          const angleOffset = Math.tan(wokAnimAngle) * clampedDx;
-          const groundY = currentWokY + angleOffset + Math.sqrt(innerRadius * innerRadius - clampedDx * clampedDx) - f.size / 2;
-
-          if (f.y >= groundY) {
-            if (f.vy > 3 && impactsPlayedThisFrame < 2) {
-              playFoodImpact();
-              impactsPlayedThisFrame++;
+        // Segmented: extra distance constraint after collision
+        s.foodBodies.forEach((f) => {
+          if (!f.nodes) return;
+          for (let iter = 0; iter < 2; iter++) {
+            for (let i = 0; i < f.nodes.length - 1; i++) {
+              const a = f.nodes[i], b = f.nodes[i + 1];
+              let dx = b.x - a.x, dy = b.y - a.y;
+              const d = Math.sqrt(dx * dx + dy * dy) || 0.001;
+              const diff = d - f.segmentLength;
+              const half = diff * 0.5;
+              const nx = dx / d, ny = dy / d;
+              a.x += nx * half;
+              a.y += ny * half;
+              b.x -= nx * half;
+              b.y -= ny * half;
             }
-            f.y = groundY;
+          }
+        });
 
-            if (isTossingGlobal) {
-              f.vy *= -bounciness;
-              f.vx *= 0.9;
-              f.rotSpeed *= 0.8;
-              f.vx -= (clampedDx / maxDx) * (2.0 / mass);
+        // Post-collision floor clamp (all bodies)
+        s.foodBodies.forEach((f) => {
+          if (f.spilled) return;
+          if (f.nodes) {
+            f.nodes.forEach((n) => {
+              let lx = (n.x - currentWokX) * cosA + (n.y - currentWokY) * sinA;
+              let ly = -(n.x - currentWokX) * sinA + (n.y - currentWokY) * cosA;
+              const clampLx = Math.max(-wall, Math.min(wall, lx));
+              const floorLy = Math.sqrt(innerRadius * innerRadius - clampLx * clampLx) - f.nodeRadius;
+              if (ly > floorLy) {
+                ly = floorLy;
+                n.x = currentWokX + clampLx * cosA - ly * sinA;
+                n.y = currentWokY + clampLx * sinA + ly * cosA;
+                n.vy *= 0.4;
+                n.vx *= 0.85;
+              }
+            });
+            return;
+          }
+          let lx = (f.x - currentWokX) * cosA + (f.y - currentWokY) * sinA;
+          let ly = -(f.x - currentWokX) * sinA + (f.y - currentWokY) * cosA;
+          const clampLx = Math.max(-wall, Math.min(wall, lx));
+          const floorLy = Math.sqrt(innerRadius * innerRadius - clampLx * clampLx) - bodyHalfExtentLy(f, wokAnimAngle);
+          if (ly > floorLy) {
+            ly = floorLy;
+            f.x = currentWokX + clampLx * cosA - ly * sinA;
+            f.y = currentWokY + clampLx * sinA + ly * cosA;
+            f.vy *= 0.4;
+            f.vx *= 0.85;
+          }
+        });
 
+        // Water particles (with unconditional + final floor clamp)
+        s.waterParticles.forEach((p) => {
+          p.vy += 0.6 * sdt;
+          p.x += p.vx * sdt;
+          p.y += p.vy * sdt;
+
+          let lx = (p.x - currentWokX) * cosA + (p.y - currentWokY) * sinA;
+          let ly = -(p.x - currentWokX) * sinA + (p.y - currentWokY) * cosA;
+          const rim = innerRadius - 1;
+          let clampX = Math.max(-rim, Math.min(rim, lx));
+          let floorY = Math.sqrt(innerRadius * innerRadius - clampX * clampX) - p.size;
+          // Unconditional: if inside bowl and below floor, snap to floor (preserve horizontal)
+          if (lx * lx + ly * ly <= (innerRadius + 2) * (innerRadius + 2) && ly > floorY) {
+            p.x = currentWokX + clampX * cosA - floorY * sinA;
+            p.y = currentWokY + clampX * sinA + floorY * cosA;
+            p.vy *= 0.2;
+            p.vx *= 0.7;
+            lx = (p.x - currentWokX) * cosA + (p.y - currentWokY) * sinA;
+            ly = -(p.x - currentWokX) * sinA + (p.y - currentWokY) * cosA;
+          }
+          if (!p.spilled) {
+            if (Math.abs(lx) > innerRadius + 5 && ly > -20) p.spilled = true;
+            clampX = Math.max(-rim, Math.min(rim, lx));
+            floorY = Math.sqrt(innerRadius * innerRadius - clampX * clampX) - p.size;
+            const poolDepth = s.waterLevel * 0.9;
+            const surfaceY = currentWokY + innerRadius - p.size - poolDepth;
+            const groundYWorld = currentWokY + clampX * sinA + floorY * cosA;
+            const inPool = surfaceY < groundYWorld;
+            let targetY = inPool
+              ? surfaceY + (groundYWorld - surfaceY) * (p.depthOffset ?? 0.5)
+              : groundYWorld;
+
+            if (p.y >= targetY) {
+              p.vy *= -0.1;
+              p.vx *= 0.95;
               const safeVx = Math.max(-18, Math.min(18, wokVx));
               const safeVy = Math.max(-18, Math.min(18, wokVy));
-              f.vx += safeVx * (0.15 / mass);
-              f.vy += safeVy * 0.3;
-              f.vx += Math.sin(wokAnimAngle) * (2.0 / mass);
-            } else {
-              f.vy = 0;
-              f.vx *= 0.35;
-              f.rotSpeed *= 0.9;
-              if (Math.abs(f.vx) < 0.15) f.vx = 0;
-            }
-          }
-
-          if (f.y > currentWokY - 150) {
-            if (f.x < currentWokX - innerRadius + 8) { f.x = currentWokX - innerRadius + 8; f.vx *= -0.5; }
-            if (f.x > currentWokX + innerRadius - 8) { f.x = currentWokX + innerRadius - 8; f.vx *= -0.5; }
-          }
-        } else {
-          f.vy += 0.8 * mass * dt;
-        }
-      });
-
-      s.foodBodies = s.foodBodies.filter(f => f.y < CH + 100);
-
-      const highLoad = s.foodBodies.length > BODY_COUNT_PERF_THRESHOLD;
-      const collisionSteps = highLoad ? 1 : 2;
-      const maxPairs = highLoad ? MAX_COLLISION_PAIRS_PER_FRAME : Infinity;
-
-      // Soft body overlaps — different stiffness per type (cap pairs when high load for 60fps)
-      let pairCount = 0;
-      for (let step = 0; step < collisionSteps; step++) {
-        if (highLoad) pairCount = 0;
-        for (let i = 0; i < s.foodBodies.length; i++) {
-          if (highLoad && pairCount >= maxPairs) break;
-          for (let j = i + 1; j < s.foodBodies.length; j++) {
-            if (highLoad && pairCount >= maxPairs) break;
-            pairCount++;
-            const f1 = s.foodBodies[i], f2 = s.foodBodies[j];
-            let ddx = f2.x - f1.x;
-            let ddy = f2.y - f1.y;
-            let distSq = ddx * ddx + ddy * ddy;
-            const r1 = (f1.w ? (f1.w + f1.h) / 2 : f1.size) || f1.size;
-            const r2 = (f2.w ? (f2.w + f2.h) / 2 : f2.size) || f2.size;
-            const minDist = (r1 + r2) * 0.5 * (isTossingGlobal ? 0.6 : 0.5);
-            const minDistSq = minDist * minDist;
-
-            if (distSq < minDistSq && distSq > 0.01) {
-              const dist = Math.sqrt(distSq);
-              const isNoodle1 = f1.type === 'noodle';
-              const isNoodle2 = f2.type === 'noodle';
-              const softFactor = (isNoodle1 || isNoodle2) ? 0.6 : 1.0;
-              const overlap = (minDist - dist) * (isTossingGlobal ? 0.4 : 0.08) * softFactor;
-              let nx = ddx / dist;
-              let ny = ddy / dist;
-
+              p.vx += safeVx * 0.05;
+              p.vy += safeVy * 0.15;
+              p.vx += Math.sin(wokAnimAngle) * 2.0;
+              // Horizontal spread when not tossing (like test page skew)
               if (!isTossingGlobal) {
-                if (Math.abs(ny) < 0.7) { ny = ny < 0 ? -0.85 : 0.85; nx *= 0.25; }
+                clampX = clampX * 0.92 + (p.skew ?? 0) * 0.35;
+                clampX = Math.max(-rim, Math.min(rim, clampX));
+                floorY = Math.sqrt(innerRadius * innerRadius - clampX * clampX) - p.size;
+                if (inPool) {
+                  const groundYWorldSkew = currentWokY + clampX * sinA + floorY * cosA;
+                  targetY = surfaceY + (groundYWorldSkew - surfaceY) * (p.depthOffset ?? 0.5);
+                }
               }
-
-              f1.x -= nx * overlap;
-              f1.y -= ny * overlap;
-              f2.x += nx * overlap;
-              f2.y += ny * overlap;
-
-              const relVx = f2.vx - f1.vx;
-              const relVy = f2.vy - f1.vy;
-              const aerationForce = isTossingGlobal ? (isNoodle1 || isNoodle2 ? 0.45 : 0.28) : 0;
-              f1.vx += relVx * aerationForce;
-              f1.vy += relVy * aerationForce;
-              f2.vx -= relVx * aerationForce;
-              f2.vy -= relVy * aerationForce;
-
-              if (!isTossingGlobal) {
-                const damp = (isNoodle1 || isNoodle2) ? 0.6 : 0.5;
-                f1.vx *= damp; f2.vx *= damp;
-                f1.vy *= 0.85; f2.vy *= 0.85;
+              // Always set BOTH coords from (clampX, floor) so particles keep horizontal spread (fix column stack)
+              if (inPool) {
+                const poolLy = Math.abs(cosA) > 0.001 ? (targetY - currentWokY - clampX * sinA) / cosA : floorY;
+                p.x = currentWokX + clampX * cosA - poolLy * sinA;
+                p.y = targetY;
+              } else {
+                p.x = currentWokX + clampX * cosA - floorY * sinA;
+                p.y = currentWokY + clampX * sinA + floorY * cosA;
               }
             }
+            if (p.y > currentWokY - 120) {
+              if (p.x < currentWokX - innerRadius) { p.x = currentWokX - innerRadius; p.vx *= -0.5; }
+              if (p.x > currentWokX + innerRadius) { p.x = currentWokX + innerRadius; p.vx *= -0.5; }
+            }
           }
-        }
+          // Final clamp: re-project to bowl curve (preserve lx so no column collapse)
+          lx = (p.x - currentWokX) * cosA + (p.y - currentWokY) * sinA;
+          ly = -(p.x - currentWokX) * sinA + (p.y - currentWokY) * cosA;
+          if (lx * lx + ly * ly <= (innerRadius + 2) * (innerRadius + 2)) {
+            clampX = Math.max(-rim, Math.min(rim, lx));
+            floorY = Math.sqrt(innerRadius * innerRadius - clampX * clampX) - p.size;
+            if (ly > floorY) {
+              p.x = currentWokX + clampX * cosA - floorY * sinA;
+              p.y = currentWokY + clampX * sinA + floorY * cosA;
+            }
+          }
+        });
+        s.waterParticles = s.waterParticles.filter((p) => p.y < CH + 100);
       }
 
-      // ==========================================
-      // WATER FLUID PARTICLE ENGINE
-      // ==========================================
+      const highLoad = s.foodBodies.length > BODY_COUNT_PERF_THRESHOLD;
+
+      // Water spawn (once per frame)
       const targetWaterCount = Math.floor(s.waterLevel * 4.0);
       const missingWater = targetWaterCount - s.waterParticles.length;
-
       if (missingWater > 0 && s.isCleaning) {
         const spawnAmount = Math.min(15, missingWater);
         for (let i = 0; i < spawnAmount; i++) {
@@ -612,57 +886,10 @@ const WokPhysics = forwardRef(function WokPhysics(
             size: 2.0 + Math.random() * 2.0,
             spilled: false,
             depthOffset: Math.random(),
+            skew: (Math.random() - 0.5) * 20,
           });
         }
       }
-
-      s.waterParticles.forEach(p => {
-        p.vy += 0.6 * dt;
-        p.x += p.vx * dt;
-        p.y += p.vy * dt;
-
-        const dx = p.x - currentWokX;
-        if (!p.spilled && Math.abs(dx) > innerRadius + 5 && p.y > currentWokY - 20) {
-          p.spilled = true;
-        }
-
-        if (!p.spilled) {
-          const maxDx = innerRadius - 2;
-          const clampedDx = Math.max(-maxDx, Math.min(maxDx, dx));
-          const angleOffset = Math.tan(wokAnimAngle) * clampedDx;
-          const groundY = currentWokY + angleOffset + Math.sqrt(innerRadius * innerRadius - clampedDx * clampedDx) - p.size;
-          const poolDepth = s.waterLevel * 0.9;
-          const surfaceY = currentWokY + innerRadius - p.size - poolDepth;
-          let targetY = groundY;
-          if (surfaceY < groundY) targetY = surfaceY + (groundY - surfaceY) * p.depthOffset;
-
-          if (p.y >= targetY) {
-            p.y = targetY;
-            p.vy *= -0.1;
-            p.vx *= 0.95;
-            if (targetY === groundY) {
-              p.vx -= clampedDx * 0.08;
-            } else {
-              p.vx += (Math.random() - 0.5) * 4.5;
-            }
-            const safeVx = Math.max(-18, Math.min(18, wokVx));
-            const safeVy = Math.max(-18, Math.min(18, wokVy));
-            p.vx += safeVx * 0.05;
-            p.vy += safeVy * 0.15;
-            p.vx += Math.sin(wokAnimAngle) * 2.0;
-          }
-
-          if (Math.abs(dx) > innerRadius * 0.7 && p.y < currentWokY + 30) {
-            p.vy += 2.5;
-            p.vx *= 0.5;
-          }
-          if (p.y > currentWokY - 120) {
-            if (p.x < currentWokX - innerRadius + 8) { p.x = currentWokX - innerRadius + 8; p.vx *= -0.5; }
-            if (p.x > currentWokX + innerRadius - 8) { p.x = currentWokX + innerRadius - 8; p.vx *= -0.5; }
-          }
-        }
-      });
-      s.waterParticles = s.waterParticles.filter(p => p.y < CH + 100);
 
       // ==========================================
       // PARTICLE GENERATION (Fire, Smoke, Oil Smoke, Bubbles)
@@ -1081,6 +1308,70 @@ const WokPhysics = forwardRef(function WokPhysics(
       };
 
       s.foodBodies.forEach(f => {
+        if (f.nodes) {
+          ctx.save();
+          if (f.type === 'noodle') {
+            const ns = f.nodes;
+            const mainColor = resolveColor(applySauceTint([250, 245, 230]), applySauceTint([220, 185, 130]), [45, 40, 35], cookRatio, burnRatio);
+            const darkColor = resolveColor(applySauceTint([230, 220, 200]), applySauceTint([190, 155, 100]), [50, 45, 38], cookRatio, burnRatio);
+            ctx.beginPath();
+            ctx.moveTo(ns[0].x, ns[0].y);
+            if (ns.length === 2) ctx.lineTo(ns[1].x, ns[1].y);
+            else {
+              for (let i = 1; i < ns.length - 1; i++) {
+                const midX = (ns[i].x + ns[i + 1].x) / 2, midY = (ns[i].y + ns[i + 1].y) / 2;
+                ctx.quadraticCurveTo(ns[i].x, ns[i].y, midX, midY);
+              }
+              ctx.lineTo(ns[ns.length - 1].x, ns[ns.length - 1].y);
+            }
+            ctx.strokeStyle = darkColor;
+            ctx.lineWidth = 10;
+            ctx.lineCap = 'round';
+            ctx.lineJoin = 'round';
+            ctx.stroke();
+            ctx.strokeStyle = mainColor;
+            ctx.lineWidth = 3;
+            ctx.stroke();
+          } else if (f.type === 'shrimp') {
+            const n0 = f.nodes[0], nL = f.nodes[f.nodes.length - 1];
+            const cxSeg = (n0.x + nL.x) / 2, cySeg = (n0.y + nL.y) / 2;
+            const angle = Math.atan2(nL.y - n0.y, nL.x - n0.x);
+            const restLen = (f.nodes.length - 1) * f.segmentLength;
+            const s = Math.max(14, Math.min(28, restLen * 0.52));
+            const bodyColor = resolveColor(applySauceTint([255, 180, 160]), applySauceTint([240, 100, 80]), [55, 35, 25], cookRatio, burnRatio);
+            const segmentColor = resolveColor(applySauceTint([240, 140, 120]), applySauceTint([200, 80, 60]), [45, 28, 22], cookRatio, burnRatio);
+            ctx.translate(cxSeg, cySeg);
+            ctx.rotate(angle);
+            const r = s * 0.65;
+            ctx.fillStyle = bodyColor;
+            ctx.beginPath();
+            ctx.ellipse(-r * 0.5, 0, r * 0.6, r, 0, -Math.PI * 0.7, Math.PI * 0.5);
+            ctx.fill();
+            ctx.strokeStyle = segmentColor;
+            ctx.lineWidth = 1.2;
+            for (let i = 1; i <= 4; i++) {
+              const t = i / 5;
+              const ang = -Math.PI * 0.6 + t * Math.PI * 1.1;
+              const segR = r * (0.7 + Math.sin(t * Math.PI) * 0.3);
+              ctx.beginPath();
+              ctx.arc(Math.cos(ang) * segR * 0.8, Math.sin(ang) * segR, 3, 0, Math.PI * 2);
+              ctx.stroke();
+            }
+            ctx.fillStyle = resolveColor(applySauceTint([255, 120, 100]), applySauceTint([230, 70, 55]), [50, 30, 22], cookRatio, burnRatio);
+            ctx.beginPath();
+            const tailAng = Math.PI * 0.4;
+            ctx.moveTo(Math.cos(tailAng) * r * 1.1, Math.sin(tailAng) * r * 1.1);
+            ctx.lineTo(Math.cos(tailAng + 0.5) * r * 1.4, Math.sin(tailAng + 0.5) * r * 1.4);
+            ctx.lineTo(Math.cos(tailAng + 0.3) * r * 1.2, Math.sin(tailAng + 0.3) * r * 1.2);
+            ctx.fill();
+            ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+            ctx.lineWidth = 0.6;
+            ctx.stroke();
+          }
+          ctx.restore();
+          return;
+        }
+
         ctx.save();
         ctx.translate(f.x, f.y);
         ctx.rotate(f.rotation);

@@ -7,9 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview", "test-page": "node serve-test-page.cjs"
   },
   "dependencies": {
+    "box2d-wasm": "^4.0.0-liquidfun.0",
     "firebase": "^12.9.0",
     "lucide-react": "^0.575.0",
     "matter-js": "^0.20.0",

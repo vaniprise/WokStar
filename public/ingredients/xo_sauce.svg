@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" data-hitbox-shape="box" data-hitbox-width="28" data-hitbox-height="36" data-viewbox-half="32">
+  <defs>
+    <linearGradient id="xo-can" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#e65100"/>
+      <stop offset="50%" stop-color="#bf360c"/>
+      <stop offset="100%" stop-color="#8b2500"/>
+    </linearGradient>
+    <radialGradient id="xo-shine" cx="0.35" cy="0.3" r="0.6">
+      <stop offset="0%" stop-color="#ff8a65"/>
+      <stop offset="100%" stop-color="#d84315"/>
+    </radialGradient>
+    <filter id="xo-shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="1" dy="2" stdDeviation="1" flood-color="#5d2c0a" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+  <rect x="18" y="14" width="28" height="36" rx="4" fill="url(#xo-shine)" filter="url(#xo-shadow)"/>
+  <rect x="22" y="18" width="20" height="28" rx="2" fill="#bf360c" opacity="0.6"/>
+  <ellipse cx="32" cy="20" rx="8" ry="3" fill="#ffab91" opacity="0.3"/>
+</svg>

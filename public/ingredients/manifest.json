@@ -1,0 +1,25 @@
+{
+  "items": [
+    { "id": "rice", "file": "rice.svg", "hitboxRadius": 7 },
+    { "id": "egg", "file": "egg.svg", "hitboxRadius": 12 },
+    { "id": "scallion", "file": "scallion.svg", "hitboxRadius": 9 },
+    { "id": "beef", "file": "beef.svg", "hitboxRadius": 20 },
+    { "id": "char_siu", "file": "char_siu.svg", "hitboxRadius": 18 },
+    { "id": "noodle", "file": "noodle.svg", "hitboxRadius": 26 },
+    { "id": "shrimp", "file": "shrimp.svg", "hitboxRadius": 16 },
+    { "id": "gai_lan", "file": "gai_lan.svg", "hitboxRadius": 24 },
+    { "id": "mushroom", "file": "mushroom.svg", "hitboxRadius": 20 },
+    { "id": "chili", "file": "chili.svg", "hitboxRadius": 9 },
+    { "id": "garlic", "file": "garlic.svg", "hitboxRadius": 6 },
+    { "id": "ginger", "file": "ginger.svg", "hitboxRadius": 5 },
+    { "id": "soy_sauce", "file": "soy_sauce.svg", "hitboxRadius": 14 },
+    { "id": "oyster_sauce", "file": "oyster_sauce.svg", "hitboxRadius": 14 },
+    { "id": "xo_sauce", "file": "xo_sauce.svg", "hitboxRadius": 16 },
+    { "id": "wine", "file": "wine.svg", "hitboxRadius": 14 },
+    { "id": "msg", "file": "msg.svg", "hitboxRadius": 12 },
+    { "id": "white_pepper", "file": "white_pepper.svg", "hitboxRadius": 12 },
+    { "id": "five_spice", "file": "five_spice.svg", "hitboxRadius": 12 },
+    { "id": "salt", "file": "salt.svg", "hitboxRadius": 12 },
+    { "id": "sugar", "file": "sugar.svg", "hitboxRadius": 12 }
+  ]
+}
