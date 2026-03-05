@@ -51,7 +51,7 @@ const DishIcon = ({ type, icons }) => (
   </div>
 );
 
-export default function GameLoop({ currentChapter = 0, score: initialScore = 0, cash: initialCash = 0, setScore: parentSetScore, setCash: parentSetCash, delight: parentDelight, setDelight: parentSetDelight, onRecipeSaved, isSandbox = false, isRestaurantMode = false, dailySpecialId = null, contracts = [], onShiftEnd }) {
+export default function GameLoop({ currentChapter = 0, score: initialScore = 0, cash: initialCash = 0, setScore: parentSetScore, setCash: parentSetCash, delight: parentDelight, setDelight: parentSetDelight, onRecipeSaved, isSandbox = false, isRestaurantMode = false, dailySpecialId = null, contracts = [], chapterTodos = [], combo: comboProp, setCombo: setComboProp, onShiftEnd }) {
   const chapter = isSandbox || isRestaurantMode ? null : STORY_CHAPTERS[Math.min(currentChapter, STORY_CHAPTERS.length - 1)];
   const wokPhysicsRef = useRef(null);
   const prevTossRef = useRef({ x: 0, y: 0 });
@@ -85,7 +85,11 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
   const setCash = isControlled ? parentSetCash : setLocalCash;
   const [soul, setSoul] = useState(0);
   const [orders, setOrders] = useState([]);
-  const [combo, setCombo] = useState(1);
+  // Combo can be controlled by parent (App) or managed locally if no props passed.
+  const [localCombo, setLocalCombo] = useState(1);
+  const isComboControlled = comboProp !== undefined && setComboProp;
+  const combo = isComboControlled ? comboProp : localCombo;
+  const setCombo = isComboControlled ? setComboProp : setLocalCombo;
   const [localDelight, setLocalDelight] = useState(0);
   const delight = parentDelight !== undefined ? parentDelight : localDelight;
   const setDelight = parentSetDelight || setLocalDelight;
@@ -140,25 +144,42 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
   }, [heatLevel, wokContents, cookProgress, burnProgress, wokHei,
       wokResidue, isCleaning, oilLevel, isOiling, toss, waterLevel, waterDirtiness]);
 
-  // Keyboard: Q = heat up, A = heat down, C = oil (hold)
+  // Keyboard:
+  // W = heat up, S = heat down
+  // D = add oil (hold), A = reduce oil
+  // Q = Gift, E = Serve, C = Clean (hold)
   useEffect(() => {
     const target = (e) => /input|textarea|select/i.test(e.target?.tagName || '');
     const onKeyDown = (e) => {
       if (target(e)) return;
       const k = e.key?.toLowerCase();
-      if (k === 'q') {
+      if (k === 'w') {
         e.preventDefault();
         setHeatLevel(prev => Math.min(100, prev + 8));
-      } else if (k === 'a') {
+      } else if (k === 's') {
         e.preventDefault();
         setHeatLevel(prev => Math.max(0, prev - 8));
-      } else if (k === 'c') {
+      } else if (k === 'd') {
         e.preventDefault();
         setIsOiling(true);
+      } else if (k === 'a') {
+        e.preventDefault();
+        setOilLevel(prev => Math.max(0, prev - 8));
+      } else if (k === 'q') {
+        e.preventDefault();
+        serveDish(true);
+      } else if (k === 'e') {
+        e.preventDefault();
+        serveDish(false);
+      } else if (k === 'c') {
+        e.preventDefault();
+        handleCleanDown();
       }
     };
     const onKeyUp = (e) => {
-      if (e.key?.toLowerCase() === 'c') setIsOiling(false);
+      const k = e.key?.toLowerCase();
+      if (k === 'd') setIsOiling(false);
+      if (k === 'c') handleCleanRelease();
     };
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
@@ -1470,6 +1491,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
             onSpill={handleSpill}
           />
           </div>
+
           {orders?.[0] && !orders[0].failed && (() => {
             const order = orders[0];
             const reqMap = {};
@@ -1478,30 +1500,54 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
             wokContents.forEach(id => { wokFreq[id] = (wokFreq[id] || 0) + 1; });
             const totalRemaining = Object.keys(reqMap).reduce((sum, id) => sum + Math.max(0, (reqMap[id] || 0) - (wokFreq[id] || 0)), 0);
             return (
-              <div className="shrink-0 bg-black/70 rounded-xl border border-neutral-700 p-4 max-h-[85%] overflow-y-auto custom-scrollbar z-10" title="Ingredients needed for current order. ✓ enough added, ✗ over-added.">
-                <div className="text-xs font-black text-neutral-400 uppercase tracking-wider mb-2">Current order</div>
-                <div className="text-sm text-amber-400 font-bold mb-3 truncate max-w-[270px]" title={order.name}>{order.name}</div>
-                <div className="text-xs text-neutral-300 font-bold mb-4">Remaining: <span className={totalRemaining === 0 ? 'text-green-400' : 'text-amber-400'}>{totalRemaining}</span></div>
-                <ul className="space-y-2">
-                  {Object.entries(reqMap).map(([id, needed]) => {
-                    const current = wokFreq[id] || 0;
-                    const remaining = Math.max(0, needed - current);
-                    const isSufficient = current >= needed;
-                    const isOver = current > needed;
-                    const item = ALL_ITEMS_BY_ID[id];
-                    if (!item) return null;
-                    return (
-                      <li key={id} className="flex items-center gap-3 text-sm">
-                        <span className="text-2xl leading-none shrink-0">{item.icon}</span>
-                        <span className="flex-1 min-w-0 truncate text-neutral-200" title={item.name}>{item.name}</span>
-                        <span className="text-neutral-500 shrink-0 tabular-nums">{current}/{needed}</span>
-                        {isSufficient && !isOver && <CheckCircle className="w-7 h-7 shrink-0 text-green-500" aria-label="enough" />}
-                        {isOver && <X className="w-7 h-7 shrink-0 text-red-500" aria-label="over-added" />}
-                        {!isSufficient && <span className="text-amber-400 shrink-0 tabular-nums">−{remaining}</span>}
-                      </li>
-                    );
-                  })}
-                </ul>
+              <div className="flex flex-col shrink-0 gap-2 w-[12.94rem]">
+                {/* Story objectives stacked directly above the current order panel */}
+                {!isSandbox && !isRestaurantMode && chapterTodos && chapterTodos.length > 0 && (
+                  <div className="bg-black/80 rounded-xl border border-neutral-700 p-3">
+                    <div className="text-[10px] font-black text-neutral-400 uppercase tracking-wider mb-2">Objectives</div>
+                    <div className="flex flex-col gap-1 text-[10px]">
+                      {(() => {
+                        const pending = chapterTodos.filter(t => !t.done);
+                        const visible = (pending.length ? pending : chapterTodos).slice(0, 2);
+                        return visible.map(t => (
+                          <div
+                            key={t.id}
+                            className={`inline-flex items-start gap-1 px-2 py-1 rounded-md border ${t.done ? 'bg-green-900/40 border-green-700/60 text-green-300' : 'bg-neutral-900/80 border-neutral-700 text-neutral-300'}`}
+                          >
+                            {t.done ? <CheckCircle className="w-3 h-3 shrink-0 mt-0.5" /> : <span className="w-3 h-3 shrink-0 rounded-full border border-current mt-0.5" />}
+                            <span className={`flex-1 min-w-0 break-words leading-snug ${t.done ? 'line-through' : ''}`}>{String(t.label)}</span>
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                  </div>
+                )}
+
+                <div className="shrink-0 bg-black/70 rounded-xl border border-neutral-700 p-4 max-h-[85%] overflow-y-auto custom-scrollbar z-10 w-full" title="Ingredients needed for current order. ✓ enough added, ✗ over-added.">
+                  <div className="text-xs font-black text-neutral-400 uppercase tracking-wider mb-2">Current order</div>
+                  <div className="text-sm text-amber-400 font-bold mb-3 truncate max-w-[270px]" title={order.name}>{order.name}</div>
+                  <div className="text-xs text-neutral-300 font-bold mb-4">Remaining: <span className={totalRemaining === 0 ? 'text-green-400' : 'text-amber-400'}>{totalRemaining}</span></div>
+                  <ul className="space-y-2">
+                    {Object.entries(reqMap).map(([id, needed]) => {
+                      const current = wokFreq[id] || 0;
+                      const remaining = Math.max(0, needed - current);
+                      const isSufficient = current >= needed;
+                      const isOver = current > needed;
+                      const item = ALL_ITEMS_BY_ID[id];
+                      if (!item) return null;
+                      return (
+                        <li key={id} className="flex items-center gap-3 text-sm">
+                          <span className="text-2xl leading-none shrink-0">{item.icon}</span>
+                          <span className="flex-1 min-w-0 truncate text-neutral-200" title={item.name}>{item.name}</span>
+                          <span className="text-neutral-500 shrink-0 tabular-nums">{current}/{needed}</span>
+                          {isSufficient && !isOver && <CheckCircle className="w-7 h-7 shrink-0 text-green-500" aria-label="enough" />}
+                          {isOver && <X className="w-7 h-7 shrink-0 text-red-500" aria-label="over-added" />}
+                          {!isSufficient && <span className="text-amber-400 shrink-0 tabular-nums">−{remaining}</span>}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
               </div>
             );
           })()}

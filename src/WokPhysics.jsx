@@ -823,21 +823,27 @@ const WokPhysics = forwardRef(function WokPhysics(
               : groundYWorld;
 
             if (p.y >= targetY) {
-              p.vy *= -0.1;
-              p.vx *= 0.95;
-              const safeVx = Math.max(-18, Math.min(18, wokVx));
-              const safeVy = Math.max(-18, Math.min(18, wokVy));
-              p.vx += safeVx * 0.05;
-              p.vy += safeVy * 0.15;
-              p.vx += Math.sin(wokAnimAngle) * 2.0;
-              // Horizontal spread when not tossing (like test page skew)
-              if (!isTossingGlobal) {
-                clampX = clampX * 0.92 + (p.skew ?? 0) * 0.35;
-                clampX = Math.max(-rim, Math.min(rim, clampX));
-                floorY = Math.sqrt(innerRadius * innerRadius - clampX * clampX) - p.size;
-                if (inPool) {
-                  const groundYWorldSkew = currentWokY + clampX * sinA + floorY * cosA;
-                  targetY = surfaceY + (groundYWorldSkew - surfaceY) * (p.depthOffset ?? 0.5);
+              if (s.isCleaning) {
+                // During cleaning, keep water calm and avoid vertical jets.
+                p.vy *= 0.2;
+                p.vx *= 0.9;
+              } else {
+                p.vy *= -0.1;
+                p.vx *= 0.95;
+                const safeVx = Math.max(-18, Math.min(18, wokVx));
+                const safeVy = Math.max(-18, Math.min(18, wokVy));
+                p.vx += safeVx * 0.05;
+                p.vy += safeVy * 0.15;
+                p.vx += Math.sin(wokAnimAngle) * 2.0;
+                // Horizontal spread when not tossing (like test page skew)
+                if (!isTossingGlobal) {
+                  clampX = clampX * 0.92 + (p.skew ?? 0) * 0.35;
+                  clampX = Math.max(-rim, Math.min(rim, clampX));
+                  floorY = Math.sqrt(innerRadius * innerRadius - clampX * clampX) - p.size;
+                  if (inPool) {
+                    const groundYWorldSkew = currentWokY + clampX * sinA + floorY * cosA;
+                    targetY = surfaceY + (groundYWorldSkew - surfaceY) * (p.depthOffset ?? 0.5);
+                  }
                 }
               }
               // Always set BOTH coords from (clampX, floor) so particles keep horizontal spread (fix column stack)
@@ -878,11 +884,13 @@ const WokPhysics = forwardRef(function WokPhysics(
       if (missingWater > 0 && s.isCleaning) {
         const spawnAmount = Math.min(15, missingWater);
         for (let i = 0; i < spawnAmount; i++) {
+          // Spawn water spread across the bowl opening with low downward speed
+          // so it quickly joins the pool instead of forming a tall column.
           s.waterParticles.push({
-            x: currentWokX + (Math.random() - 0.5) * 20,
-            y: currentWokY - 180 - Math.random() * 10,
-            vx: (Math.random() - 0.5) * 1.5,
-            vy: Math.random() * 3 + 10,
+            x: currentWokX + (Math.random() - 0.5) * innerRadius * 1.6,
+            y: currentWokY - innerRadius - 40 - Math.random() * 10,
+            vx: (Math.random() - 0.5) * 0.8,
+            vy: Math.random() * 2 + 4,
             size: 2.0 + Math.random() * 2.0,
             spilled: false,
             depthOffset: Math.random(),
@@ -1224,7 +1232,8 @@ const WokPhysics = forwardRef(function WokPhysics(
         ctx.rotate(-wokAnimAngle);
         const oilH = 6 + oilRatio * 22;
         const oilW = (wokRadius - 22) * oilRatio * 1.15;
-        const oilY = wokRadius - 28 - oilH * 0.5;
+        // Shift the visual oil pool 15px further down into the wok.
+        const oilY = wokRadius - 28 - oilH * 0.5 + 15;
         const shiftX = wokAnimAngle * 42;
         const liquidGrad = ctx.createLinearGradient(shiftX, oilY + oilH, shiftX, oilY - oilH);
         liquidGrad.addColorStop(0, 'rgba(180, 120, 20, 0.85)');

@@ -18,7 +18,24 @@
     .btns { display: flex; flex-wrap: wrap; gap: 4px; }
     .btns button { padding: 4px 8px; font-size: 10px; border: 1px solid #444; border-radius: 4px; background: #333; color: #ddd; cursor: pointer; }
     .btns button:hover { background: #404040; }
+    .fluid-mode.active { background: #3a5a3a; border-color: #5a7a5a; color: #cfc; }
+    .anim-row { margin-top: 14px; }
     .clr { margin-top: 6px; padding: 6px 10px; font-size: 11px; background: #5a2a2a; color: #f88; border: 1px solid #733; border-radius: 4px; cursor: pointer; }
+    .horse-ref { margin-top: 16px; padding-top: 8px; border-top: 1px solid #333; }
+    .horse-ref p { font-size: 10px; color: #777; margin-bottom: 6px; }
+    .horse-ref input[type="file"] { font-size: 10px; margin-bottom: 4px; }
+    .horse-ref button { margin-top: 4px; padding: 4px 8px; font-size: 10px; border: 1px solid #444; border-radius: 4px; background: #333; color: #ddd; cursor: pointer; }
+    .horse-ref button:hover { background: #404040; }
+    .drop-zone { margin-top: 6px; padding: 6px; border: 1px dashed #555; border-radius: 4px; font-size: 10px; color: #888; text-align: center; }
+    .drop-zone.drag-over { border-color: #aaa; color: #ccc; background: #303030; }
+    .horse-ref-status { font-size: 10px; color: #aaa; margin-top: 4px; min-height: 1em; }
+    .signature-ref { margin-top: 10px; padding-top: 8px; border-top: 1px solid #333; }
+    .signature-ref p { font-size: 10px; color: #777; margin-bottom: 4px; }
+    #signatureCanvas { display: block; background: #0d0d0d; border: 1px solid #444; border-radius: 4px; cursor: crosshair; }
+    .signature-btns { display: flex; gap: 4px; margin-top: 4px; flex-wrap: wrap; }
+    .signature-btns button { padding: 3px 6px; font-size: 9px; border: 1px solid #444; border-radius: 4px; background: #333; color: #ddd; cursor: pointer; }
+    .signature-btns button:hover { background: #404040; }
+    .signature-ref-status { font-size: 10px; color: #aaa; margin-top: 4px; min-height: 1em; }
   </style>
 </head>
 <body>
@@ -32,10 +49,36 @@
     <div class="side">
       <h2>Add ingredient</h2>
       <div class="btns" id="btns"></div>
+      <h2 class="anim-row">Oil/water</h2>
+      <div class="btns" id="fluidInterfaceBtns">
+        <button type="button" id="fluidRoomTemp" class="fluid-mode active">Room temp</button>
+        <button type="button" id="fluidHotOil" class="fluid-mode">Hot oil</button>
+      </div>
+      <h2 class="anim-row">Animation</h2>
+      <div class="btns" id="animBtns"></div>
+      <div class="horse-ref" id="horseRef">
+        <h2>Horse reference</h2>
+        <p>Drop a line-art horse image or choose a file. When you click “Use image”, particles will trace its outline when you press the Horse button.</p>
+        <input type="file" id="horseFile" accept="image/*">
+        <div class="drop-zone" id="horseDrop">Drop image here or click file picker above</div>
+        <button id="horseApplyBtn">Use image for Horse</button>
+        <div class="horse-ref-status" id="horseRefStatus"></div>
+      </div>
+      <div class="signature-ref" id="signatureRef">
+        <h2>Signature</h2>
+        <p>Sign in the box; click “Use signature”, then press the Signature button.</p>
+        <canvas id="signatureCanvas" width="220" height="80"></canvas>
+        <div class="signature-btns">
+          <button id="signatureClearBtn">Clear</button>
+          <button id="signatureApplyBtn">Use signature</button>
+        </div>
+        <div class="signature-ref-status" id="signatureRefStatus"></div>
+      </div>
       <button class="clr" id="clr">Clear all</button>
     </div>
   </div>
 
+  <script src="./horse_outline.js" id="horseOutlineLoader"></script>
   <script type="module">
   import Box2DFactory from '/Box2D.js';
   (function () {
@@ -44,8 +87,28 @@
     var canvas = document.getElementById('c');
     var ctx = canvas ? canvas.getContext('2d') : null;
     var btns = document.getElementById('btns');
+    var animBtns = document.getElementById('animBtns');
     var clr = document.getElementById('clr');
     var statusEl = document.getElementById('status');
+    var horseFileInput = document.getElementById('horseFile');
+    var horseDrop = document.getElementById('horseDrop');
+    var horseApplyBtn = document.getElementById('horseApplyBtn');
+    var horseRefStatus = document.getElementById('horseRefStatus');
+    var signatureCanvas = document.getElementById('signatureCanvas');
+    var signatureClearBtn = document.getElementById('signatureClearBtn');
+    var signatureApplyBtn = document.getElementById('signatureApplyBtn');
+    var signatureRefStatus = document.getElementById('signatureRefStatus');
+    // Raw horse pixels (screen space, y-up already).
+    // May come from particle_map.json, user-dropped image, or signature canvas.
+    var horsePixelRaw = null;
+    var signaturePixelRaw = null;
+    // Kick off JSON load; will be converted to world coords in buildHorseSlots.
+    fetch('./particle_map.json')
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (data) {
+        if (Array.isArray(data)) horsePixelRaw = data;
+      })
+      .catch(function () { /* ignore */ });
     if (!ctx || !btns) return;
 
     function setStatus(msg) { if (statusEl) statusEl.textContent = msg; }
@@ -62,23 +125,304 @@
     }
     simpleLoop();
 
-    // Buttons: use LiquidFun once Box2D.wasm is ready
-    ['Water', 'Oil', 'Elastic', 'Tensile', 'Flame', 'Add gel', 'Add noodle', 'Tornado'].forEach(function (label) {
+    // ---- Horse reference image handling (drop / file input) ----
+    var horsePendingFile = null;
+
+    function setHorseRefStatus(msg) {
+      if (horseRefStatus) horseRefStatus.textContent = msg || '';
+    }
+
+    function handleHorseFile(file) {
+      if (!file) return;
+      horsePendingFile = file;
+      setHorseRefStatus('Selected: ' + file.name + ' — click "Use image for Horse" to apply.');
+    }
+
+    if (horseFileInput) {
+      horseFileInput.addEventListener('change', function (e) {
+        var f = e.target.files && e.target.files[0];
+        if (f) handleHorseFile(f);
+      });
+    }
+
+    if (horseDrop) {
+      ['dragenter', 'dragover'].forEach(function (ev) {
+        horseDrop.addEventListener(ev, function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          horseDrop.classList.add('drag-over');
+        });
+      });
+      ['dragleave', 'drop'].forEach(function (ev) {
+        horseDrop.addEventListener(ev, function (e) {
+          e.preventDefault();
+          e.stopPropagation();
+          horseDrop.classList.remove('drag-over');
+        });
+      });
+      horseDrop.addEventListener('drop', function (e) {
+        var dt = e.dataTransfer;
+        if (dt && dt.files && dt.files[0]) {
+          handleHorseFile(dt.files[0]);
+        }
+      });
+      // Allow paste of image into the drop zone
+      horseDrop.addEventListener('paste', function (e) {
+        var items = e.clipboardData && e.clipboardData.items;
+        if (!items) return;
+        for (var i = 0; i < items.length; i++) {
+          if (items[i].type.indexOf('image') === 0) {
+            var f = items[i].getAsFile();
+            if (f) {
+              handleHorseFile(f);
+              break;
+            }
+          }
+        }
+      });
+    }
+
+    function buildHorsePixelsFromImageFile(file) {
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function (evt) {
+        var img = new Image();
+        img.onload = function () {
+          try {
+            var off = document.createElement('canvas');
+            off.width = img.width;
+            off.height = img.height;
+            var octx = off.getContext('2d');
+            if (!octx) return;
+            octx.drawImage(img, 0, 0);
+            var imgData = octx.getImageData(0, 0, off.width, off.height);
+            var data = imgData.data;
+            var xs = [];
+            var ys = [];
+            for (var y = 0; y < off.height; y++) {
+              for (var x = 0; x < off.width; x++) {
+                var idx = (y * off.width + x) * 4;
+                var r = data[idx], g = data[idx + 1], b = data[idx + 2], a = data[idx + 3];
+                if (a < 10) continue;
+                // treat dark pixels as line
+                if (r < 200 && g < 200 && b < 200) {
+                  xs.push(x);
+                  ys.push(y);
+                }
+              }
+            }
+            if (!xs.length) {
+              setHorseRefStatus('No dark line pixels found in image.');
+              return;
+            }
+            var n = xs.length;
+            var want = 1000;
+            var idxs;
+            if (n <= want) {
+              idxs = [];
+              for (var i = 0; i < n; i++) idxs.push(i);
+              if (n < want) setHorseRefStatus('Warning: only ' + n + ' line pixels; using all of them.');
+            } else {
+              idxs = [];
+              for (var i = 0; i < n; i++) idxs.push(i);
+              for (var i2 = n - 1; i2 > 0; i2--) {
+                var j2 = Math.floor(Math.random() * (i2 + 1));
+                var tmp = idxs[i2]; idxs[i2] = idxs[j2]; idxs[j2] = tmp;
+              }
+              idxs = idxs.slice(0, want);
+            }
+            var h = off.height;
+            var pts = [];
+            for (var k = 0; k < idxs.length; k++) {
+              var ii = idxs[k];
+              var px = xs[ii];
+              var py = ys[ii];
+              var yUp = h - py; // invert Y so +Y is up
+              pts.push({ x: px, y: yUp });
+            }
+            horsePixelRaw = pts;
+            setHorseRefStatus('Horse map loaded from image (' + pts.length + ' points). Press the Horse button to use it.');
+          } catch (err) {
+            console.error('Error building horse pixels from image', err);
+            setHorseRefStatus('Error processing image.');
+          }
+        };
+        img.onerror = function () {
+          setHorseRefStatus('Could not load image.');
+        };
+        img.src = evt.target.result;
+      };
+      reader.onerror = function () {
+        setHorseRefStatus('Could not read image file.');
+      };
+      reader.readAsDataURL(file);
+    }
+
+    if (horseApplyBtn) {
+      horseApplyBtn.addEventListener('click', function () {
+        if (!horsePendingFile) {
+          setHorseRefStatus('Choose or drop an image first.');
+          return;
+        }
+        setHorseRefStatus('Processing image…');
+        buildHorsePixelsFromImageFile(horsePendingFile);
+      });
+    }
+
+    // ---- Signature drawing box ----
+    if (signatureCanvas) {
+      var sigCtx = signatureCanvas.getContext('2d');
+      var sigDrawing = false;
+
+      function setSignatureStatus(msg) {
+        if (signatureRefStatus) signatureRefStatus.textContent = msg || '';
+      }
+
+      function resetSignatureCanvas() {
+        sigCtx.fillStyle = '#0d0d0d';
+        sigCtx.fillRect(0, 0, signatureCanvas.width, signatureCanvas.height);
+        sigCtx.strokeStyle = '#fff';
+        sigCtx.lineWidth = 2;
+        sigCtx.lineCap = 'round';
+        sigCtx.lineJoin = 'round';
+        signaturePixelRaw = null;
+        setSignatureStatus('');
+      }
+
+      resetSignatureCanvas();
+
+      function getSignatureCoords(e) {
+        var rect = signatureCanvas.getBoundingClientRect();
+        var x = (e.clientX - rect.left) * (signatureCanvas.width / rect.width);
+        var y = (e.clientY - rect.top) * (signatureCanvas.height / rect.height);
+        return { x: x, y: y };
+      }
+
+      signatureCanvas.addEventListener('pointerdown', function (e) {
+        if (e.button !== 0 && e.buttons !== 1) return;
+        e.preventDefault();
+        sigDrawing = true;
+        try { signatureCanvas.setPointerCapture(e.pointerId); } catch (err) {}
+        var p = getSignatureCoords(e);
+        sigCtx.beginPath();
+        sigCtx.moveTo(p.x, p.y);
+      });
+
+      signatureCanvas.addEventListener('pointermove', function (e) {
+        if (!sigDrawing) return;
+        e.preventDefault();
+        var p = getSignatureCoords(e);
+        sigCtx.lineTo(p.x, p.y);
+        sigCtx.stroke();
+      });
+
+      function endSignatureStroke(e) {
+        if (!sigDrawing) return;
+        sigDrawing = false;
+        try { signatureCanvas.releasePointerCapture(e.pointerId); } catch (err) {}
+      }
+
+      signatureCanvas.addEventListener('pointerup', endSignatureStroke);
+      signatureCanvas.addEventListener('pointercancel', endSignatureStroke);
+
+      function buildSignaturePixelsFromCanvas() {
+        var w = signatureCanvas.width;
+        var h = signatureCanvas.height;
+        var imgData = sigCtx.getImageData(0, 0, w, h);
+        var data = imgData.data;
+        var xs = [];
+        var ys = [];
+        for (var y = 0; y < h; y++) {
+          for (var x = 0; x < w; x++) {
+            var idx = (y * w + x) * 4;
+            var r = data[idx], g = data[idx + 1], b = data[idx + 2], a = data[idx + 3];
+            if (a < 10) continue;
+            // signature strokes are light on dark
+            var brightness = (r + g + b) / 3;
+            if (brightness > 180) {
+              xs.push(x);
+              ys.push(y);
+            }
+          }
+        }
+        if (!xs.length) {
+          setSignatureStatus('No signature strokes detected. Draw with the mouse, then click Use signature.');
+          signaturePixelRaw = null;
+          return;
+        }
+        var n = xs.length;
+        var want = 1000;
+        var idxs = [];
+        for (var i = 0; i < n; i++) idxs.push(i);
+        if (n > want) {
+          // shuffle and take first N
+          for (var j = n - 1; j > 0; j--) {
+            var k = Math.floor(Math.random() * (j + 1));
+            var tmp = idxs[j]; idxs[j] = idxs[k]; idxs[k] = tmp;
+          }
+          idxs = idxs.slice(0, want);
+        } else if (n < want) {
+          setSignatureStatus('Warning: only ' + n + ' signature pixels; using all of them.');
+        }
+        var pts = [];
+        for (var m = 0; m < idxs.length; m++) {
+          var ii = idxs[m];
+          var px = xs[ii];
+          var py = ys[ii];
+          var yUp = h - py; // invert Y so +Y is up
+          pts.push({ x: px, y: yUp });
+        }
+        signaturePixelRaw = pts;
+        setSignatureStatus('Signature captured (' + pts.length + ' points). Press the Signature button to use it.');
+      }
+
+      if (signatureClearBtn) {
+        signatureClearBtn.addEventListener('click', function () {
+          resetSignatureCanvas();
+        });
+      }
+
+      if (signatureApplyBtn) {
+        signatureApplyBtn.addEventListener('click', function () {
+          buildSignaturePixelsFromCanvas();
+        });
+      }
+    }
+
+    // Buttons: ingredients and environment in separate rows
+    ['Oil', 'Water', 'Beef strips', 'Prawn', 'Kai lan', 'Chopped garlic', 'Chopped ginger', 'Soy sauce', 'Make wok'].forEach(function (label) {
       var btn = document.createElement('button');
       btn.textContent = label;
       btn.onclick = function () {
         if (!window.particleSandboxReady) return;
-        if (label === 'Water' && window.pourWater) window.pourWater();
-        else if (label === 'Oil' && window.pourOil) window.pourOil();
-        else if (label === 'Elastic' && window.addElastic) window.addElastic();
-        else if (label === 'Tensile' && window.addTensile) window.addTensile();
-        else if (label === 'Flame' && window.addFlame) window.addFlame();
-        else if (label === 'Add gel' && window.addGelBlob) window.addGelBlob();
-        else if (label === 'Add noodle' && window.addNoodle) window.addNoodle();
-        else if (label === 'Tornado' && window.startTornado) window.startTornado();
+        if (label === 'Oil' && window.pourWater) window.pourWater();
+        else if (label === 'Water' && window.pourOil) window.pourOil();
+        else if (label === 'Beef strips' && window.addBeefStrips) window.addBeefStrips();
+        else if (label === 'Prawn' && window.addPrawn) window.addPrawn();
+        else if (label === 'Kai lan' && window.addKaiLan) window.addKaiLan();
+        else if (label === 'Chopped garlic' && window.addGarlic) window.addGarlic();
+        else if (label === 'Chopped ginger' && window.addGinger) window.addGinger();
+        else if (label === 'Soy sauce' && window.addSoySauce) window.addSoySauce();
+        else if (label === 'Make wok' && window.makeWok) window.makeWok();
       };
       btns.appendChild(btn);
     });
+
+    if (animBtns) {
+      ['Tornado', 'Funnel', 'Horse', 'Star', 'Signature'].forEach(function (label) {
+        var btn = document.createElement('button');
+        btn.textContent = label;
+        btn.onclick = function () {
+          if (!window.particleSandboxReady) return;
+          if (label === 'Tornado' && window.startTornado) window.startTornado();
+          else if (label === 'Funnel' && window.startFunnel) window.startFunnel();
+          else if (label === 'Horse' && window.startHorse) window.startHorse();
+          else if (label === 'Star' && window.startStar) window.startStar();
+          else if (label === 'Signature' && window.startSignature) window.startSignature();
+        };
+        animBtns.appendChild(btn);
+      });
+    }
 
     if (clr) clr.onclick = function () {
       if (window.particleSandboxReady && window.clearContainer) window.clearContainer();
@@ -140,6 +484,125 @@
         addEdge(CW / SCALE, CH / SCALE, CW / SCALE, 0);
         lf.destroy(filter);
 
+        var wokBody = null;
+        // Make the wok 30% bigger than the current size.
+        var wokRadius = (CW / SCALE) * 0.286; // 0.22 * 1.3
+        var wokHandleLen = 0.78; // 0.6 * 1.3
+        var wokHandleHalfHeight = 0.156; // 0.12 * 1.3
+        var wokDragging = false;
+        var wokHitRadius = wokRadius * 1.1;
+        var wokLastPointerWorld = null;
+        var wokDragOffset = null; // pointer offset from wok center when dragging
+
+        function makeWok() {
+            if (!wokBody) {
+            // Create a kinematic bowl-shaped body we can move around.
+            var bd = new lf.b2BodyDef();
+            bd.set_type(lf.b2_kinematicBody);
+            var pos = new lf.b2Vec2(halfW, halfH + 0.8);
+            bd.set_position(pos);
+            bd.set_angle(0);
+            lf.destroy(pos);
+            wokBody = world.CreateBody(bd);
+            lf.destroy(bd);
+
+            var wFilter = new lf.b2Filter();
+            wFilter.set_categoryBits(1);
+            wFilter.set_maskBits(65535);
+
+            var segments = 40;
+            // Build a semicircle as a chain of short thick boxes following the arc.
+            // This gives the wok a finite wall thickness so particles are much less likely to leak.
+            // Thicken boundary by a further 30%.
+            var wallThickness = wokRadius * 0.156; // 0.12 * 1.3 ≈ 15.6% of radius
+            var halfThickness = wallThickness * 0.5;
+            for (var i = 0; i < segments; i++) {
+              var a0 = (i / segments) * Math.PI;
+              var a1 = ((i + 1) / segments) * Math.PI;
+              var am = 0.5 * (a0 + a1);
+              // Arc length for this segment; half used as box half-width.
+              var arcLen = wokRadius * (a1 - a0);
+              var halfLen = arcLen * 0.5;
+              // Center point of this arc segment in wok-local space (outer wall centerline).
+              var cx = wokRadius * Math.cos(am);
+              var cy = wokRadius * Math.sin(am);
+              var center = new lf.b2Vec2(cx, cy);
+              // Box oriented along the tangent of the circle at angle am.
+              var boxShape = new lf.b2PolygonShape();
+              boxShape.SetAsBox(halfLen, halfThickness, center, am + Math.PI * 0.5);
+              var fd = new lf.b2FixtureDef();
+              fd.set_shape(boxShape);
+              fd.set_friction(0.5);
+              fd.set_restitution(0.0);
+              fd.set_density(0);
+              fd.set_filter(wFilter);
+              wokBody.CreateFixture(fd);
+              lf.destroy(center);
+              lf.destroy(boxShape);
+              lf.destroy(fd);
+            }
+
+            // Add a thin inner barrier layer along the curved inside boundary of the wok.
+            // This is a second arc, slightly inside the main wall, that helps catch particles
+            // right at the bowl interior.
+            var innerRadius = wokRadius - wallThickness * 0.6;
+            var barrierThickness = halfThickness * 0.6;
+            for (var j = 0; j < segments; j++) {
+              var b0 = (j / segments) * Math.PI;
+              var b1 = ((j + 1) / segments) * Math.PI;
+              var bm = 0.5 * (b0 + b1);
+              var barArcLen = innerRadius * (b1 - b0);
+              var barHalfLen = barArcLen * 0.5;
+              var bcx = innerRadius * Math.cos(bm);
+              var bcy = innerRadius * Math.sin(bm);
+              var bCenter = new lf.b2Vec2(bcx, bcy);
+              var barrierShape = new lf.b2PolygonShape();
+              barrierShape.SetAsBox(barHalfLen, barrierThickness, bCenter, bm + Math.PI * 0.5);
+              var bfd = new lf.b2FixtureDef();
+              bfd.set_shape(barrierShape);
+              bfd.set_friction(0.6);
+              bfd.set_restitution(0.0);
+              bfd.set_density(0);
+              bfd.set_filter(wFilter);
+              wokBody.CreateFixture(bfd);
+              lf.destroy(bCenter);
+              lf.destroy(barrierShape);
+              lf.destroy(bfd);
+            }
+
+            // Add a short rectangular handle on the right side of the wok.
+            var handleShape = new lf.b2PolygonShape();
+            handleShape.SetAsBox(
+              wokHandleLen * 0.5,
+              wokHandleHalfHeight,
+              new lf.b2Vec2(wokRadius + wokHandleLen * 0.5, 0),
+              0
+            );
+            var hfd = new lf.b2FixtureDef();
+            hfd.set_shape(handleShape);
+            hfd.set_friction(0.5);
+            hfd.set_restitution(0.0);
+            hfd.set_density(0);
+            hfd.set_filter(wFilter);
+            wokBody.CreateFixture(hfd);
+            lf.destroy(handleShape);
+            lf.destroy(hfd);
+
+            lf.destroy(wFilter);
+            setStatus('Movable wok created — drag it like the green ball');
+          } else {
+            // Reset wok position and stop motion.
+            var c = new lf.b2Vec2(halfW, halfH + 0.8);
+            var zeroW = new lf.b2Vec2(0, 0);
+            wokBody.SetTransform(c, 0);
+            wokBody.SetLinearVelocity(zeroW);
+            wokBody.SetAngularVelocity(0);
+            lf.destroy(c);
+            lf.destroy(zeroW);
+            setStatus('Wok reset to center');
+          }
+        }
+
         var groundBodyDef = new lf.b2BodyDef();
         groundBodyDef.set_type(lf.b2_staticBody);
         var groundPos = new lf.b2Vec2(0, 0);
@@ -166,12 +629,40 @@
           return sys;
         }
 
-        var waterSystem = makeFluidSystem();
-        var oilSystem = makeFluidSystem();
+        // Water/oil systems using generic LiquidFun-style defaults from makeFluidSystem.
+        // This reinitialises both to the same base parameters; behavioral differences
+        // now come only from per-group particle flags (water vs viscous).
+        function makeWaterSystem() {
+          return makeFluidSystem();
+        }
+
+        function makeOilSystem() {
+          return makeFluidSystem();
+        }
+
+        var waterSystem = makeWaterSystem();
+        var oilSystem = makeOilSystem();
         var elasticSystem = makeFluidSystem();
         var tensileSystem = makeFluidSystem();
         var gelSystem = makeFluidSystem();
-        var noodleSystem = makeFluidSystem();
+        // Noodles: separate system, thinner radius, very damped so they flop then settle.
+        var noodlePsd = new lf.b2ParticleSystemDef();
+        // Keep the same particle radius; thickness is controlled by the noodle shape below.
+        noodlePsd.set_radius(0.012);
+        // Start with relatively light damping; we'll make individual noodles
+        // highly damped only once they touch a surface.
+        noodlePsd.set_dampingStrength(0.25);
+        noodlePsd.set_destroyByAge(false);
+        noodlePsd.set_lifetimeGranularity(1 / 60);
+        noodlePsd.set_powderStrength(0.0);
+        noodlePsd.set_colorMixingStrength(0.3);
+        noodlePsd.set_maxCount(8000);
+        var noodleSystem = world.CreateParticleSystem(noodlePsd);
+        noodleSystem.SetRadius(0.012);
+        lf.destroy(noodlePsd);
+        // Track noodle particle groups so we can switch them to "sticky"
+        // once any part of a noodle touches a surface.
+        var noodleGroups = [];
 
         var flamePsd = new lf.b2ParticleSystemDef();
         flamePsd.set_radius(0.02);
@@ -186,31 +677,51 @@
         lf.destroy(flamePsd);
 
         var tornadoUntil = 0;
+        var fluidInterfaceMode = 'roomTemp'; // 'roomTemp' | 'hotOil'
         var vortexCenterX = halfW;
         var vortexCenterY = halfH;
+
+        (function initFluidInterfaceToggle() {
+          var roomBtn = document.getElementById('fluidRoomTemp');
+          var hotBtn = document.getElementById('fluidHotOil');
+          function setActive(room) {
+            fluidInterfaceMode = room ? 'roomTemp' : 'hotOil';
+            if (roomBtn) {
+              if (room) roomBtn.classList.add('active'); else roomBtn.classList.remove('active');
+            }
+            if (hotBtn) {
+              if (!room) hotBtn.classList.add('active'); else hotBtn.classList.remove('active');
+            }
+          }
+          if (roomBtn) roomBtn.addEventListener('click', function () { setActive(true); });
+          if (hotBtn) hotBtn.addEventListener('click', function () { setActive(false); });
+        })();
 
         function applyTornadoToSystem(ps) {
           var count = ps.GetParticleCount();
           if (count === 0) return;
+          if (!lf.HEAPF32) return;
           var posBuf = ps.GetPositionBuffer();
+          var velBuf = ps.GetVelocityBuffer();
           var posPtr = lf.getPointer(posBuf);
-          if (!posPtr) return;
-          var vecs = lf.reifyArray(posPtr, count, 8, lf.b2Vec2);
+          var velPtr = lf.getPointer(velBuf);
+          if (!posPtr || !velPtr) return;
+          var posBase = posPtr >> 2;
+          var velBase = velPtr >> 2;
           for (var i = 0; i < count; i++) {
-            var px = vecs[i].get_x();
-            var py = vecs[i].get_y();
+            var px = lf.HEAPF32[posBase + i * 2];
+            var py = lf.HEAPF32[posBase + i * 2 + 1];
             if (px !== px || py !== py) continue;
             var dx = px - vortexCenterX;
             var dy = py - vortexCenterY;
             var dist = Math.sqrt(dx * dx + dy * dy) + 0.02;
             var invDist = 1 / dist;
-            var inward = -2.5 * invDist;
-            var tangent = 8.0 * invDist;
-            var fx = dx * inward - dy * tangent;
-            var fy = dy * inward + dx * tangent;
-            var force = new lf.b2Vec2(fx, fy);
-            ps.ParticleApplyForce(i, force);
-            lf.destroy(force);
+            var tangent = 6.0 * invDist;
+            var inward = -1.5 * invDist;
+            var vx = dx * inward - dy * tangent;
+            var vy = dy * inward + dx * tangent;
+            lf.HEAPF32[velBase + i * 2] += vx;
+            lf.HEAPF32[velBase + i * 2 + 1] += vy;
           }
         }
 
@@ -224,10 +735,1329 @@
           applyTornadoToSystem(flameSystem);
         }
 
+        var ballPushRadius = 0.9;
+        var ballPushStrength = 6.0;
+
+        function applyBallDisturbance(ps) {
+          if (!ballBody || !lf.HEAPF32) return;
+          try {
+            var count = ps.GetParticleCount();
+            if (count === 0) return;
+            var pos = ballBody.GetPosition();
+            var bx = pos.get_x();
+            var by = pos.get_y();
+            var posBuf = ps.GetPositionBuffer();
+            var velBuf = ps.GetVelocityBuffer();
+            if (!posBuf || !velBuf) return;
+            var posPtr = lf.getPointer(posBuf);
+            var velPtr = lf.getPointer(velBuf);
+            if (!posPtr || !velPtr) return;
+            var posBase = posPtr >> 2;
+            var velBase = velPtr >> 2;
+            for (var i = 0; i < count; i++) {
+              var px = lf.HEAPF32[posBase + i * 2];
+              var py = lf.HEAPF32[posBase + i * 2 + 1];
+              if (px !== px || py !== py) continue;
+              var dx = px - bx;
+              var dy = py - by;
+              var distSq = dx * dx + dy * dy;
+              var dist = Math.sqrt(distSq) + 0.01;
+              if (dist > ballPushRadius) continue;
+              var invDist = 1 / dist;
+              var push = ballPushStrength * (1 - dist / ballPushRadius) * invDist;
+              var vx = dx * push;
+              var vy = dy * push;
+              lf.HEAPF32[velBase + i * 2] += vx;
+              lf.HEAPF32[velBase + i * 2 + 1] += vy;
+            }
+          } catch (err) { /* avoid freezing if buffer access fails */ }
+        }
+
+        function applyBallDisturbanceAll() {
+          applyBallDisturbance(waterSystem);
+          applyBallDisturbance(oilSystem);
+          applyBallDisturbance(elasticSystem);
+          applyBallDisturbance(tensileSystem);
+          applyBallDisturbance(gelSystem);
+          applyBallDisturbance(noodleSystem);
+          applyBallDisturbance(flameSystem);
+        }
+
+        // Extra damping / sticking behavior for noodle particles.
+        // Noodles fall freely while airborne. Once any part of a noodle touches
+        // a surface (bottom of the container or wok bowl), that entire noodle
+        // becomes "sticky": its particles strongly damp and stay attached to
+        // the contact surface instead of sliding.
+        function dampNoodlesOnSurfaces() {
+          if (!noodleSystem || !lf.HEAPF32 || !noodleGroups || noodleGroups.length === 0) return;
+          var total = noodleSystem.GetParticleCount();
+          if (!total) return;
+
+          var posBuf = noodleSystem.GetPositionBuffer();
+          var velBuf = noodleSystem.GetVelocityBuffer();
+          var posPtr = lf.getPointer(posBuf);
+          var velPtr = lf.getPointer(velBuf);
+          if (!posPtr || !velPtr) return;
+
+          var posBase = posPtr >> 2;
+          var velBase = velPtr >> 2;
+          var bottomY = CH / SCALE;
+          var noodleRadius = (noodleSystem.GetRadius && noodleSystem.GetRadius()) || 0.012;
+          var bottomStickY = bottomY - noodleRadius * 0.5;
+
+          // Wok contact approximation: treat the bowl as a circular arc.
+          var haveWok = !!wokBody;
+          var wokCx = 0;
+          var wokCy = 0;
+          var wokInnerRadius = 0;
+          if (haveWok) {
+            var wPos = wokBody.GetPosition();
+            wokCx = wPos.get_x();
+            wokCy = wPos.get_y();
+            // Match the inner barrier radius used when building the wok walls.
+            wokInnerRadius = wokRadius - (wokRadius * 0.156) * 0.6;
+          }
+
+          for (var gi = 0; gi < noodleGroups.length; gi++) {
+            var entry = noodleGroups[gi];
+            if (!entry || !entry.group) continue;
+            var g = entry.group;
+            var start = g.GetBufferIndex ? g.GetBufferIndex() : 0;
+            var count = g.GetParticleCount ? g.GetParticleCount() : 0;
+            if (!count) continue;
+            var end = start + count;
+
+            // Detect contact with any surface for this noodle, and also allow
+            // noodles to *lose* stickiness once they are clearly airborne again.
+            var touchingNow = false;
+            for (var i = start; i < end; i++) {
+              var pxScan = lf.HEAPF32[posBase + i * 2];
+              var pyScan = lf.HEAPF32[posBase + i * 2 + 1];
+              if (pxScan !== pxScan || pyScan !== pyScan) continue;
+
+              var touching = false;
+              // Bottom of the container.
+              if (pyScan >= bottomStickY) {
+                touching = true;
+              }
+              // Wok bowl interior/edge.
+              if (!touching && haveWok) {
+                var lxScan = pxScan - wokCx;
+                var lyScan = pyScan - wokCy;
+                var distScan = Math.sqrt(lxScan * lxScan + lyScan * lyScan);
+                if (distScan >= wokInnerRadius - noodleRadius * 0.6 &&
+                    distScan <= wokInnerRadius + noodleRadius * 0.8) {
+                  touching = true;
+                }
+              }
+
+              if (touching) {
+                touchingNow = true;
+                if (!entry.stuck) {
+                  // First time this noodle has touched a surface → become sticky.
+                  entry.stuck = true;
+                }
+                // No need to keep scanning once we've found contact.
+                break;
+              }
+            }
+
+            // If this noodle was previously stuck but is now clearly off all
+            // surfaces, let it become free again (e.g. launched back into the air).
+            // It will become sticky again on the next surface contact.
+            if (entry.stuck && !touchingNow) {
+              entry.stuck = false;
+            }
+
+            // Apply behavior: free fall until stuck, then stick and heavily damp.
+            var freeFactor = 0.98;
+            var stuckFactor = 0.05;
+            var factor = entry.stuck ? stuckFactor : freeFactor;
+
+            for (var j = start; j < end; j++) {
+              var pxIndex = posBase + j * 2;
+              var pyIndex = pxIndex + 1;
+              var vxIndex = velBase + j * 2;
+              var vyIndex = vxIndex + 1;
+
+              var px = lf.HEAPF32[pxIndex];
+              var py = lf.HEAPF32[pyIndex];
+              var vx = lf.HEAPF32[vxIndex];
+              var vy = lf.HEAPF32[vyIndex];
+              if (px !== px || py !== py || vx !== vx || vy !== vy) continue;
+
+              if (entry.stuck) {
+                // If we're near the bottom, snap onto the floor and kill downward motion.
+                if (py >= bottomStickY) {
+                  lf.HEAPF32[pyIndex] = bottomStickY;
+                  if (vy > 0) vy = 0;
+                }
+
+                // If we're near the wok bowl, project onto the bowl arc radius
+                // so the noodle hugs the curved surface.
+                if (haveWok) {
+                  var lx2 = px - wokCx;
+                  var ly2 = py - wokCy;
+                  var dist2 = Math.sqrt(lx2 * lx2 + ly2 * ly2);
+                  if (dist2 >= wokInnerRadius - noodleRadius &&
+                      dist2 <= wokInnerRadius + noodleRadius * 1.2 &&
+                      dist2 > 0.0001) {
+                    var scale = wokInnerRadius / dist2;
+                    lf.HEAPF32[pxIndex] = wokCx + lx2 * scale;
+                    lf.HEAPF32[pyIndex] = wokCy + ly2 * scale;
+                    // Kill normal (radial) motion by heavily damping both components.
+                  }
+                }
+              }
+
+              lf.HEAPF32[vxIndex] = vx * factor;
+              lf.HEAPF32[vyIndex] = vy * factor;
+            }
+          }
+        }
+
+        // Dispatcher: room-temperature (swap + damp) or hot oil (snap oil to water surface).
+        function adjustFluidBuoyancy() {
+          if (fluidInterfaceMode === 'hotOil') {
+            adjustFluidBuoyancyHotOil();
+            return;
+          }
+          adjustFluidBuoyancyRoomTemp();
+        }
+
+        // Room-temperature water on oil: when water falls onto oil, water loses 99%
+        // momentum and water/oil swap vertical positions until water reaches bottom.
+        function adjustFluidBuoyancyRoomTemp() {
+          if (!lf.HEAPF32 || !waterSystem || !oilSystem) return;
+          var oilParticleCount = (waterSystem && waterSystem.GetParticleCount && waterSystem.GetParticleCount()) || 0;
+          var waterParticleCount = (oilSystem && oilSystem.GetParticleCount && oilSystem.GetParticleCount()) || 0;
+          if (!oilParticleCount || !waterParticleCount) return;
+
+          var bins = 64;
+          var containerWidth = CW / SCALE;
+          var binWidth = containerWidth / bins;
+
+          // Per-column oil surface: shallowest (top) oil particle y and its index.
+          var surfaceOilY = new Array(bins);
+          var surfaceOilIdx = new Array(bins);
+          for (var i = 0; i < bins; i++) {
+            surfaceOilY[i] = null;
+            surfaceOilIdx[i] = -1;
+          }
+
+          // First pass: build oil surface from yellow oil (waterSystem).
+          (function buildOilSurface() {
+            var ps = waterSystem;
+            var count = ps.GetParticleCount();
+            if (!count) return;
+            var posBuf = ps.GetPositionBuffer();
+            var posPtr = lf.getPointer(posBuf);
+            if (!posPtr) return;
+            var base = posPtr >> 2;
+            for (var j = 0; j < count; j++) {
+              var px = lf.HEAPF32[base + j * 2];
+              var py = lf.HEAPF32[base + j * 2 + 1];
+              if (px !== px || py !== py) continue;
+              var bin = Math.floor(px / binWidth);
+              if (bin < 0) bin = 0;
+              if (bin >= bins) bin = bins - 1;
+              var cur = surfaceOilY[bin];
+              if (cur === null || py < cur) {
+                surfaceOilY[bin] = py;
+                surfaceOilIdx[bin] = j;
+              }
+            }
+          })();
+
+          // Second pass: for each blue water particle (oilSystem), if it is above
+          // the oil surface in its column, swap y with that oil particle and lose
+          // 99% momentum so oil does not disperse. Process water top-to-bottom so
+          // multiple waters in one column swap in order until they reach bottom/other water.
+          (function swapWaterOntoOil() {
+            var ps = oilSystem;
+            var count = ps.GetParticleCount();
+            if (!count) return;
+            var posBuf = ps.GetPositionBuffer();
+            var velBuf = ps.GetVelocityBuffer();
+            var posPtr = lf.getPointer(posBuf);
+            var velPtr = lf.getPointer(velBuf);
+            if (!posPtr || !velPtr) return;
+            var posBase = posPtr >> 2;
+            var velBase = velPtr >> 2;
+
+            var oilPosBuf = waterSystem.GetPositionBuffer();
+            var oilVelBuf = waterSystem.GetVelocityBuffer();
+            var oilPosPtr = lf.getPointer(oilPosBuf);
+            var oilVelPtr = lf.getPointer(oilVelBuf);
+            if (!oilPosPtr || !oilVelPtr) return;
+            var oilPosBase = oilPosPtr >> 2;
+            var oilVelBase = oilVelPtr >> 2;
+
+            // Build list of water indices and y, sort by y ascending (top first).
+            var list = [];
+            for (var j = 0; j < count; j++) {
+              var py = lf.HEAPF32[posBase + j * 2 + 1];
+              if (py !== py) continue;
+              list.push({ j: j, py: py });
+            }
+            list.sort(function (a, b) { return a.py - b.py; });
+
+            for (var i = 0; i < list.length; i++) {
+              var j = list[i].j;
+              var px = lf.HEAPF32[posBase + j * 2];
+              var py = lf.HEAPF32[posBase + j * 2 + 1];
+              if (px !== px || py !== py) continue;
+
+              var bin = Math.floor(px / binWidth);
+              if (bin < 0) bin = 0;
+              if (bin >= bins) bin = bins - 1;
+              var oilY = surfaceOilY[bin];
+              var oilJ = surfaceOilIdx[bin];
+              if (oilY === null || oilJ < 0) continue;
+
+              // Water above oil (smaller y = higher): swap places and damp water.
+              if (py >= oilY) continue;
+
+              var oilPyIndex = oilPosBase + oilJ * 2 + 1;
+              var oilVyIndex = oilVelBase + oilJ * 2 + 1;
+              var oilVxIndex = oilVelBase + oilJ * 2;
+
+              var waterPyIndex = posBase + j * 2 + 1;
+              var waterVyIndex = velBase + j * 2 + 1;
+              var waterVxIndex = velBase + j * 2;
+
+              var oldWaterY = py;
+              var oilYVal = lf.HEAPF32[oilPyIndex];
+
+              // Swap y: water goes to oil surface, oil goes to water's old y.
+              lf.HEAPF32[waterPyIndex] = oilYVal;
+              lf.HEAPF32[oilPyIndex] = oldWaterY;
+
+              // Water loses 99% momentum so it doesn't disperse the oil.
+              var vx = lf.HEAPF32[waterVxIndex];
+              var vy = lf.HEAPF32[waterVyIndex];
+              if (vx !== vx) vx = 0;
+              if (vy !== vy) vy = 0;
+              vx *= 0.01;
+              vy *= 0.01;
+              lf.HEAPF32[waterVxIndex] = vx;
+              lf.HEAPF32[waterVyIndex] = vy;
+
+              // Oil gets the same damped velocity so they settle together, no jump.
+              lf.HEAPF32[oilVxIndex] = vx;
+              lf.HEAPF32[oilVyIndex] = vy;
+
+              // New oil surface in this column is where we moved the oil (old water y).
+              surfaceOilY[bin] = oldWaterY;
+            }
+          })();
+        }
+
+        // Hot oil: keep oil floating on water by snapping oil to the water surface
+        // and adopting the water surface vertical velocity (no gap, no bounce).
+        function adjustFluidBuoyancyHotOil() {
+          if (!lf.HEAPF32 || !waterSystem || !oilSystem) return;
+          var oilParticleCount = (waterSystem && waterSystem.GetParticleCount && waterSystem.GetParticleCount()) || 0;
+          var waterParticleCount = (oilSystem && oilSystem.GetParticleCount && oilSystem.GetParticleCount()) || 0;
+          if (!oilParticleCount || !waterParticleCount) return;
+
+          var bins = 64;
+          var containerWidth = CW / SCALE;
+          var bottomY = CH / SCALE;
+          var binWidth = containerWidth / bins;
+
+          var waterPoolMinY = new Array(bins);
+          var waterSurfaceVy = new Array(bins);
+          for (var i = 0; i < bins; i++) {
+            waterPoolMinY[i] = null;
+            waterSurfaceVy[i] = 0;
+          }
+
+          (function accumulateWater() {
+            var ps = oilSystem;
+            var count = ps.GetParticleCount();
+            if (!count) return;
+            var posBuf = ps.GetPositionBuffer();
+            var velBuf = ps.GetVelocityBuffer();
+            var posPtr = lf.getPointer(posBuf);
+            var velPtr = lf.getPointer(velBuf);
+            if (!posPtr || !velPtr) return;
+            var posBase = posPtr >> 2;
+            var velBase = velPtr >> 2;
+            for (var j = 0; j < count; j++) {
+              var px = lf.HEAPF32[posBase + j * 2];
+              var py = lf.HEAPF32[posBase + j * 2 + 1];
+              if (px !== px || py !== py) continue;
+              if (py <= bottomY - 1.2) continue;
+              var bin = Math.floor(px / binWidth);
+              if (bin < 0) bin = 0;
+              if (bin >= bins) bin = bins - 1;
+              var cur = waterPoolMinY[bin];
+              if (cur === null || py < cur) {
+                waterPoolMinY[bin] = py;
+                var vy = lf.HEAPF32[velBase + j * 2 + 1];
+                waterSurfaceVy[bin] = (vy === vy) ? vy : 0;
+              }
+            }
+          })();
+
+          var desiredSeparation = 0.0;
+
+          (function correctOil() {
+            var ps = waterSystem;
+            var count = ps.GetParticleCount();
+            if (!count) return;
+            var posBuf = ps.GetPositionBuffer();
+            var velBuf = ps.GetVelocityBuffer();
+            var posPtr = lf.getPointer(posBuf);
+            var velPtr = lf.getPointer(velBuf);
+            if (!posPtr || !velPtr) return;
+            var posBase = posPtr >> 2;
+            var velBase = velPtr >> 2;
+
+            for (var j = 0; j < count; j++) {
+              var pxIndex = posBase + j * 2;
+              var pyIndex = pxIndex + 1;
+              var vxIndex = velBase + j * 2;
+              var vyIndex = vxIndex + 1;
+
+              var px = lf.HEAPF32[pxIndex];
+              var py = lf.HEAPF32[pyIndex];
+              if (px !== px || py !== py) continue;
+
+              var bin = Math.floor(px / binWidth);
+              if (bin < 0) bin = 0;
+              if (bin >= bins) bin = bins - 1;
+              var poolY = waterPoolMinY[bin];
+              if (poolY === null) continue;
+
+              var targetY = poolY - desiredSeparation;
+              var vy = lf.HEAPF32[vyIndex];
+              var vx = lf.HEAPF32[vxIndex];
+              if (vy !== vy) vy = 0;
+              if (vx !== vx) vx = 0;
+
+              if (py > targetY) {
+                lf.HEAPF32[pyIndex] = targetY;
+                vy = waterSurfaceVy[bin] || 0;
+              }
+
+              lf.HEAPF32[vxIndex] = vx;
+              lf.HEAPF32[vyIndex] = vy;
+            }
+          })();
+        }
+
         function startTornado() {
           tornadoUntil = performance.now() + 4000;
           setStatus('Tornado!');
           setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, 4100);
+        }
+
+        var funnelUntil = 0;
+        var funnelStartTime = 0;
+        var funnelDripUntil = 0;
+        var funnelDuration = 6500;
+        var funnelCenterX = halfW;
+        var funnelTopY = 1.2;
+        var funnelBottomY = 4;
+
+        function funnelHalfWidth(py) {
+          if (py >= funnelBottomY) return 0;
+          return funnelCenterX * (1 - py / funnelBottomY);
+        }
+
+        function applyFunnelToSystem(ps) {
+          var count = ps.GetParticleCount();
+          if (count === 0) return;
+          if (!lf.HEAPF32) return;
+          var now = performance.now();
+          var t = (now - funnelStartTime) / funnelDuration;
+          if (t < 0 || t > 1) return;
+          var posBuf = ps.GetPositionBuffer();
+          var velBuf = ps.GetVelocityBuffer();
+          var posPtr = lf.getPointer(posBuf);
+          var velPtr = lf.getPointer(velBuf);
+          if (!posPtr || !velPtr) return;
+          var posBase = posPtr >> 2;
+          var velBase = velPtr >> 2;
+
+          for (var i = 0; i < count; i++) {
+            var px = lf.HEAPF32[posBase + i * 2];
+            var py = lf.HEAPF32[posBase + i * 2 + 1];
+            if (px !== px || py !== py) continue;
+
+            var vx = 0, vy = 0;
+
+            if (t < 0.18) {
+              var dxTop = funnelCenterX - px;
+              var dyTop = funnelTopY - py;
+              var distTop = Math.sqrt(dxTop * dxTop + dyTop * dyTop) + 0.02;
+              var invTop = 1 / distTop;
+              var tangent = 6.5 * invTop;
+              var inward = -1.8 * invTop;
+              vx = dxTop * inward - dyTop * tangent;
+              vy = dyTop * inward + dxTop * tangent;
+            } else if (t < 0.72) {
+              var dx = funnelCenterX - px;
+              var dy = funnelBottomY - py;
+              var dist = Math.sqrt(dx * dx + dy * dy) + 0.02;
+              var invDist = 1 / dist;
+              var pullRamp = (2.5 + (t - 0.18) * 6) * 0.5;
+              var pull = pullRamp * invDist;
+              var swayPhase = py * 2.8 + (now * 0.008);
+              var swayAmp = (2.2 - (t - 0.18) * 2.0) * 0.5;
+              if (swayAmp < 0.15) swayAmp = 0.15;
+              var sway = swayAmp * Math.sin(swayPhase);
+              vx = dx * pull * 0.45 + sway;
+              vy = dy * pull * 0.1;
+
+              var hw = funnelHalfWidth(py);
+              var distFromCenter = px - funnelCenterX;
+              if (hw > 0.05 && Math.abs(distFromCenter) > hw) {
+                var pushIn = 2.5 * (Math.abs(distFromCenter) - hw);
+                if (distFromCenter > 0) pushIn = -pushIn;
+                vx += pushIn;
+              }
+            } else {
+              var dxBall = funnelCenterX - px;
+              var dyBall = funnelBottomY - py;
+              var distBall = Math.sqrt(dxBall * dxBall + dyBall * dyBall) + 0.02;
+              var invBall = 1 / distBall;
+              var pullBall = 7.0 * invBall;
+              vx = dxBall * pullBall;
+              vy = dyBall * pullBall;
+            }
+
+            lf.HEAPF32[velBase + i * 2] += vx;
+            lf.HEAPF32[velBase + i * 2 + 1] += vy;
+          }
+        }
+
+        function applyFunnelAll() {
+          applyFunnelToSystem(waterSystem);
+          applyFunnelToSystem(oilSystem);
+          applyFunnelToSystem(elasticSystem);
+          applyFunnelToSystem(tensileSystem);
+          applyFunnelToSystem(gelSystem);
+          applyFunnelToSystem(noodleSystem);
+          applyFunnelToSystem(flameSystem);
+        }
+
+        var funnelDripRadius = 0.55;
+        var funnelDripDuration = 2200;
+        var funnelDripSettleMs = 280;
+
+        function applyFunnelDripToSystem(ps, isSpringParticles) {
+          var count = ps.GetParticleCount();
+          if (count === 0) return;
+          if (!lf.HEAPF32) return;
+          var now = performance.now();
+          var elapsed = now - funnelUntil;
+          var posBuf = ps.GetPositionBuffer();
+          var velBuf = ps.GetVelocityBuffer();
+          var posPtr = lf.getPointer(posBuf);
+          var velPtr = lf.getPointer(velBuf);
+          if (!posPtr || !velPtr) return;
+          var posBase = posPtr >> 2;
+          var velBase = velPtr >> 2;
+          for (var i = 0; i < count; i++) {
+            var px = lf.HEAPF32[posBase + i * 2];
+            var py = lf.HEAPF32[posBase + i * 2 + 1];
+            if (px !== px || py !== py) continue;
+            var dx = px - funnelCenterX;
+            var dy = py - funnelBottomY;
+            var dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > funnelDripRadius) continue;
+            var vx = lf.HEAPF32[velBase + i * 2];
+            var vy = lf.HEAPF32[velBase + i * 2 + 1];
+            if (elapsed < funnelDripSettleMs) {
+              if (isSpringParticles) {
+                lf.HEAPF32[velBase + i * 2] = vx * 0.2;
+                lf.HEAPF32[velBase + i * 2 + 1] = vy * 0.2;
+              } else {
+                lf.HEAPF32[velBase + i * 2] = 0;
+                lf.HEAPF32[velBase + i * 2 + 1] = 0;
+              }
+            } else {
+              var gentleDown = 0.45;
+              var gentleSpread = 0.1;
+              lf.HEAPF32[velBase + i * 2] = dx * gentleSpread;
+              lf.HEAPF32[velBase + i * 2 + 1] = gentleDown;
+            }
+          }
+        }
+
+        function applyFunnelDripAll() {
+          applyFunnelDripToSystem(waterSystem);
+          applyFunnelDripToSystem(oilSystem);
+          applyFunnelDripToSystem(elasticSystem);
+          applyFunnelDripToSystem(tensileSystem);
+          applyFunnelDripToSystem(gelSystem);
+          applyFunnelDripToSystem(flameSystem);
+          applyFunnelDripToSystem(noodleSystem, true);
+        }
+
+        function startFunnel() {
+          funnelStartTime = performance.now();
+          funnelUntil = funnelStartTime + funnelDuration;
+          funnelDripUntil = funnelUntil + funnelDripDuration;
+          setStatus('Funnel — swirling at top…');
+          setTimeout(function () {
+            if (window.particleSandboxReady) setStatus('Funnel — zig-zagging down…');
+          }, funnelDuration * 0.2);
+          setTimeout(function () {
+            if (window.particleSandboxReady) setStatus('Funnel — forming ball…');
+          }, funnelDuration * 0.72);
+          setTimeout(function () {
+            if (window.particleSandboxReady) setStatus('Dripping from ball…');
+          }, funnelDuration + 200);
+          setTimeout(function () {
+            if (window.particleSandboxReady) setStatus('Gently pouring out…');
+          }, funnelDuration + 400);
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, funnelDuration + funnelDripDuration + 500);
+        }
+
+        // ----- Star animation -----
+        var starUntil = 0;
+        var starStartTime = 0;
+        var starDripUntil = 0;
+        var starDuration = 9000;
+        var starDripDuration = 2400;
+        var starDripSettleMs = 260;
+        var starCenterX = halfW;
+        var starCenterY = halfH;
+        var starBallRadius = 0.55;
+        var starNumSlots = 600;
+        var starSlotPositions = [];
+        var starAssignments = null;
+
+        // 5-pointed star in normalized coords around (0,0) radius 1.
+        function buildStarSlots() {
+          var outerR = 1.0;
+          var innerR = 0.4;
+          var pts = [];
+          for (var i = 0; i < 5; i++) {
+            var outerA = (-Math.PI / 2) + i * (2 * Math.PI / 5);
+            var innerA = outerA + Math.PI / 5;
+            pts.push({ x: Math.cos(outerA) * outerR, y: Math.sin(outerA) * outerR });
+            pts.push({ x: Math.cos(innerA) * innerR, y: Math.sin(innerA) * innerR });
+          }
+          // Close loop
+          pts.push(pts[0]);
+
+          var segs = [];
+          var total = 0;
+          for (var s = 0; s < pts.length - 1; s++) {
+            var p0 = pts[s], p1 = pts[s + 1];
+            var dx = p1.x - p0.x, dy = p1.y - p0.y;
+            var L = Math.sqrt(dx * dx + dy * dy) + 1e-9;
+            segs.push({ start: total, length: L, p0: p0, p1: p1 });
+            total += L;
+          }
+          starSlotPositions = [];
+          var n = starNumSlots;
+          var scale = 1.7; // star size
+          for (var k = 0; k < n; k++) {
+            var u = (k / (n - 1)) * total;
+            for (var s = 0; s < segs.length; s++) {
+              var seg = segs[s];
+              if (u <= seg.start + seg.length) {
+                var t = (u - seg.start) / (seg.length + 1e-9);
+                t = Math.max(0, Math.min(1, t));
+                var nx = seg.p0.x + t * (seg.p1.x - seg.p0.x);
+                var ny = seg.p0.y + t * (seg.p1.y - seg.p0.y);
+                var wx = starCenterX + nx * scale;
+                var wy = starCenterY + ny * scale;
+                starSlotPositions.push({ x: wx, y: wy });
+                break;
+              }
+            }
+          }
+        }
+
+        function applyStarToSystem(ps, systemIndex) {
+          var count = ps.GetParticleCount();
+          if (count === 0) return;
+          if (!lf.HEAPF32) return;
+          var now = performance.now();
+          var t = (now - starStartTime) / starDuration;
+          if (t < 0 || t > 1) return;
+          var posBuf = ps.GetPositionBuffer();
+          var velBuf = ps.GetVelocityBuffer();
+          var posPtr = lf.getPointer(posBuf);
+          var velPtr = lf.getPointer(velBuf);
+          if (!posPtr || !velPtr) return;
+          var posBase = posPtr >> 2;
+          var velBase = velPtr >> 2;
+
+          // Star form & hold phase: assign particles to star slots
+          if (t >= 0.2 && t < 0.65) {
+            if (!starAssignments) {
+              starAssignments = [];
+              var systems = [waterSystem, oilSystem, elasticSystem, tensileSystem, gelSystem, noodleSystem, flameSystem];
+              for (var si = 0; si < systems.length; si++) {
+                var sys = systems[si];
+                var c = sys.GetParticleCount();
+                var slots = [];
+                if (c === 0 || starNumSlots <= 0) { starAssignments[si] = slots; continue; }
+                for (var i = 0; i < c; i++) {
+                  slots[i] = i % starNumSlots;
+                }
+                starAssignments[si] = slots;
+              }
+            }
+            var slots = starAssignments[systemIndex];
+            if (slots && starSlotPositions.length > 0) {
+              for (var i = 0; i < count; i++) {
+                var slotIndex = slots[i];
+                if (slotIndex === undefined) continue;
+                var target = starSlotPositions[slotIndex];
+                if (!target) continue;
+                var px = lf.HEAPF32[posBase + i * 2];
+                var py = lf.HEAPF32[posBase + i * 2 + 1];
+                if (px !== px || py !== py) continue;
+                var dx = target.x - px, dy = target.y - py;
+                var dist = Math.sqrt(dx * dx + dy * dy) + 0.01;
+                var pull = 8.0 / dist;
+                lf.HEAPF32[velBase + i * 2] += dx * pull;
+                lf.HEAPF32[velBase + i * 2 + 1] += dy * pull;
+              }
+            }
+            return;
+          }
+
+          // Suck-to-center and ball phases
+          for (var i = 0; i < count; i++) {
+            var px = lf.HEAPF32[posBase + i * 2];
+            var py = lf.HEAPF32[posBase + i * 2 + 1];
+            if (px !== px || py !== py) continue;
+            var vx = 0, vy = 0;
+            var dx = starCenterX - px;
+            var dy = starCenterY - py;
+            var dist = Math.sqrt(dx * dx + dy * dy) + 0.02;
+            var pull;
+            if (t < 0.2) pull = 5.0 / dist;
+            else pull = 6.0 / dist;
+            vx = dx * pull;
+            vy = dy * pull;
+            lf.HEAPF32[velBase + i * 2] += vx;
+            lf.HEAPF32[velBase + i * 2 + 1] += vy;
+          }
+        }
+
+        function applyStarAll() {
+          applyStarToSystem(waterSystem, 0);
+          applyStarToSystem(oilSystem, 1);
+          applyStarToSystem(elasticSystem, 2);
+          applyStarToSystem(tensileSystem, 3);
+          applyStarToSystem(gelSystem, 4);
+          applyStarToSystem(noodleSystem, 5);
+          applyStarToSystem(flameSystem, 6);
+        }
+
+        function applyStarDripToSystem(ps, isSpringParticles) {
+          var count = ps.GetParticleCount();
+          if (count === 0) return;
+          if (!lf.HEAPF32) return;
+          var now = performance.now();
+          var elapsed = now - starUntil;
+          var posBuf = ps.GetPositionBuffer();
+          var velBuf = ps.GetVelocityBuffer();
+          var posPtr = lf.getPointer(posBuf);
+          var velPtr = lf.getPointer(velBuf);
+          if (!posPtr || !velPtr) return;
+          var posBase = posPtr >> 2;
+          var velBase = velPtr >> 2;
+          var dripRadius = starBallRadius + 0.2;
+          for (var i = 0; i < count; i++) {
+            var px = lf.HEAPF32[posBase + i * 2];
+            var py = lf.HEAPF32[posBase + i * 2 + 1];
+            if (px !== px || py !== py) continue;
+            var dx = px - starCenterX;
+            var dy = py - starCenterY;
+            var dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > dripRadius) continue;
+            var vx = lf.HEAPF32[velBase + i * 2];
+            var vy = lf.HEAPF32[velBase + i * 2 + 1];
+            if (elapsed < starDripSettleMs) {
+              if (isSpringParticles) {
+                lf.HEAPF32[velBase + i * 2] = vx * 0.2;
+                lf.HEAPF32[velBase + i * 2 + 1] = vy * 0.2;
+              } else {
+                lf.HEAPF32[velBase + i * 2] = 0;
+                lf.HEAPF32[velBase + i * 2 + 1] = 0;
+              }
+            } else {
+              var gentleDown = 0.3;
+              var gentleSpread = 0.06;
+              lf.HEAPF32[velBase + i * 2] = dx * gentleSpread;
+              lf.HEAPF32[velBase + i * 2 + 1] = gentleDown;
+            }
+          }
+        }
+
+        function applyStarDripAll() {
+          applyStarDripToSystem(waterSystem);
+          applyStarDripToSystem(oilSystem);
+          applyStarDripToSystem(elasticSystem);
+          applyStarDripToSystem(tensileSystem);
+          applyStarDripToSystem(gelSystem);
+          applyStarDripToSystem(flameSystem);
+          applyStarDripToSystem(noodleSystem, true);
+        }
+
+        function startStar() {
+          starStartTime = performance.now();
+          starUntil = starStartTime + starDuration;
+          starDripUntil = starUntil + starDripDuration;
+          starAssignments = null;
+          buildStarSlots();
+          setStatus('Star — pulling to center…');
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Star — forming shape…'); }, starDuration * 0.2);
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Star — holding shape…'); }, starDuration * 0.3);
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Star — forming ball…'); }, starDuration * 0.65);
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Star — gently pouring out…'); }, starDuration + 300);
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, starDuration + starDripDuration + 600);
+        }
+
+        // ----- Signature animation -----
+        var signatureUntil = 0;
+        var signatureStartTime = 0;
+        var signatureDripUntil = 0;
+        var signatureDuration = 9000;
+        var signatureHoldDuration = 3000;
+        var signatureDripDuration = 2600;
+        var signatureDripSettleMs = 280;
+        var signatureCenterX = halfW;
+        var signatureCenterY = halfH;
+        var signatureBallRadius = 0.55;
+        var signatureNumSlots = 1000;
+        var signatureSlotPositions = [];
+        var signatureAssignments = null;
+
+        function buildSignatureSlots() {
+          if (!signaturePixelRaw || !signaturePixelRaw.length) {
+            signatureSlotPositions = [];
+            signatureNumSlots = 0;
+            return;
+          }
+          var minX = signaturePixelRaw[0].x, maxX = signaturePixelRaw[0].x;
+          var minY = signaturePixelRaw[0].y, maxY = signaturePixelRaw[0].y;
+          for (var i = 1; i < signaturePixelRaw.length; i++) {
+            var p = signaturePixelRaw[i];
+            if (p.x < minX) minX = p.x;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.y > maxY) maxY = p.y;
+          }
+          var cx = (minX + maxX) * 0.5;
+          var cy = (minY + maxY) * 0.5;
+          var span = Math.max(maxX - minX, maxY - minY, 1e-6);
+          var scale = 1.6;
+          signatureSlotPositions = [];
+          for (var j = 0; j < signaturePixelRaw.length; j++) {
+            var hp = signaturePixelRaw[j];
+            var nx = (hp.x - cx) / span;
+            var ny = -(hp.y - cy) / span; // y-up to y-down
+            var wx = signatureCenterX + nx * 2 * scale;
+            var wy = signatureCenterY + ny * 2 * scale;
+            signatureSlotPositions.push({ x: wx, y: wy });
+          }
+          signatureNumSlots = signatureSlotPositions.length;
+        }
+
+        function applySignatureToSystem(ps, systemIndex) {
+          var count = ps.GetParticleCount();
+          if (count === 0) return;
+          if (!lf.HEAPF32) return;
+          var now = performance.now();
+          var t = (now - signatureStartTime) / signatureDuration;
+          if (t < 0 || t > 1) return;
+          var posBuf = ps.GetPositionBuffer();
+          var velBuf = ps.GetVelocityBuffer();
+          var posPtr = lf.getPointer(posBuf);
+          var velPtr = lf.getPointer(velBuf);
+          if (!posPtr || !velPtr) return;
+          var posBase = posPtr >> 2;
+          var velBase = velPtr >> 2;
+
+          // Center bounce/cloud phase
+          if (t < 0.3) {
+            for (var i = 0; i < count; i++) {
+              var px = lf.HEAPF32[posBase + i * 2];
+              var py = lf.HEAPF32[posBase + i * 2 + 1];
+              if (px !== px || py !== py) continue;
+              var dx = signatureCenterX - px;
+              var dy = signatureCenterY - py - 0.5; // encourage upward movement
+              var dist = Math.sqrt(dx * dx + dy * dy) + 0.02;
+              var pull = (t < 0.15 ? 6.0 : 4.0) / dist;
+              // add a little swirl noise
+              var phase = (px + py + now * 0.01) * 2.0;
+              var swirl = 0.5 * Math.sin(phase);
+              var vx = dx * pull + (-dy) * 0.2 * swirl;
+              var vy = dy * pull + dx * 0.1 * swirl;
+              lf.HEAPF32[velBase + i * 2] += vx;
+              lf.HEAPF32[velBase + i * 2 + 1] += vy;
+            }
+            return;
+          }
+
+          // Signature form & hold phase
+          if (t >= 0.3 && t < 0.65) {
+            if (!signatureAssignments) {
+              signatureAssignments = [];
+              var systems = [waterSystem, oilSystem, elasticSystem, tensileSystem, gelSystem, noodleSystem, flameSystem];
+              for (var si = 0; si < systems.length; si++) {
+                var sys = systems[si];
+                var c = sys.GetParticleCount();
+                var slots = [];
+                if (c === 0 || signatureNumSlots <= 0) { signatureAssignments[si] = slots; continue; }
+                for (var i2 = 0; i2 < c; i2++) {
+                  slots[i2] = i2 % signatureNumSlots;
+                }
+                signatureAssignments[si] = slots;
+              }
+            }
+            var slots = signatureAssignments[systemIndex];
+            if (slots && signatureSlotPositions.length > 0) {
+              for (var k = 0; k < count; k++) {
+                var slotIndex = slots[k];
+                if (slotIndex === undefined) continue;
+                var target = signatureSlotPositions[slotIndex];
+                if (!target) continue;
+                var px2 = lf.HEAPF32[posBase + k * 2];
+                var py2 = lf.HEAPF32[posBase + k * 2 + 1];
+                if (px2 !== px2 || py2 !== py2) continue;
+                var dx2 = target.x - px2;
+                var dy2 = target.y - py2;
+                var dist2 = Math.sqrt(dx2 * dx2 + dy2 * dy2) + 0.01;
+                var pull2 = 8.0 / dist2;
+                lf.HEAPF32[velBase + k * 2] += dx2 * pull2;
+                lf.HEAPF32[velBase + k * 2 + 1] += dy2 * pull2;
+              }
+            }
+            return;
+          }
+
+          // Gather into a central ball
+          for (var i3 = 0; i3 < count; i3++) {
+            var px3 = lf.HEAPF32[posBase + i3 * 2];
+            var py3 = lf.HEAPF32[posBase + i3 * 2 + 1];
+            if (px3 !== px3 || py3 !== py3) continue;
+            var dx3 = signatureCenterX - px3;
+            var dy3 = signatureCenterY - py3;
+            var dist3 = Math.sqrt(dx3 * dx3 + dy3 * dy3) + 0.02;
+            var pull3 = 6.0 / dist3;
+            lf.HEAPF32[velBase + i3 * 2] += dx3 * pull3;
+            lf.HEAPF32[velBase + i3 * 2 + 1] += dy3 * pull3;
+          }
+        }
+
+        function applySignatureAll() {
+          applySignatureToSystem(waterSystem, 0);
+          applySignatureToSystem(oilSystem, 1);
+          applySignatureToSystem(elasticSystem, 2);
+          applySignatureToSystem(tensileSystem, 3);
+          applySignatureToSystem(gelSystem, 4);
+          applySignatureToSystem(noodleSystem, 5);
+          applySignatureToSystem(flameSystem, 6);
+        }
+
+        function applySignatureDripToSystem(ps, isSpringParticles) {
+          var count = ps.GetParticleCount();
+          if (count === 0) return;
+          if (!lf.HEAPF32) return;
+          var now = performance.now();
+          var elapsed = now - signatureUntil;
+          var posBuf = ps.GetPositionBuffer();
+          var velBuf = ps.GetVelocityBuffer();
+          var posPtr = lf.getPointer(posBuf);
+          var velPtr = lf.getPointer(velBuf);
+          if (!posPtr || !velPtr) return;
+          var posBase = posPtr >> 2;
+          var velBase = velPtr >> 2;
+          var dripRadius = signatureBallRadius + 0.2;
+          for (var i = 0; i < count; i++) {
+            var px = lf.HEAPF32[posBase + i * 2];
+            var py = lf.HEAPF32[posBase + i * 2 + 1];
+            if (px !== px || py !== py) continue;
+            var dx = px - signatureCenterX;
+            var dy = py - signatureCenterY;
+            var dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > dripRadius) continue;
+            var vx = lf.HEAPF32[velBase + i * 2];
+            var vy = lf.HEAPF32[velBase + i * 2 + 1];
+            if (elapsed < signatureDripSettleMs) {
+              if (isSpringParticles) {
+                lf.HEAPF32[velBase + i * 2] = vx * 0.2;
+                lf.HEAPF32[velBase + i * 2 + 1] = vy * 0.2;
+              } else {
+                lf.HEAPF32[velBase + i * 2] = 0;
+                lf.HEAPF32[velBase + i * 2 + 1] = 0;
+              }
+            } else {
+              var gentleDown = 0.32;
+              var gentleSpread = 0.06;
+              lf.HEAPF32[velBase + i * 2] = dx * gentleSpread;
+              lf.HEAPF32[velBase + i * 2 + 1] = gentleDown;
+            }
+          }
+        }
+
+        function applySignatureDripAll() {
+          applySignatureDripToSystem(waterSystem);
+          applySignatureDripToSystem(oilSystem);
+          applySignatureDripToSystem(elasticSystem);
+          applySignatureDripToSystem(tensileSystem);
+          applySignatureDripToSystem(gelSystem);
+          applySignatureDripToSystem(flameSystem);
+          applySignatureDripToSystem(noodleSystem, true);
+        }
+
+        function startSignature() {
+          if (!signaturePixelRaw || !signaturePixelRaw.length) {
+            setStatus('Draw your signature and click "Use signature" first.');
+            return;
+          }
+          signatureStartTime = performance.now();
+          signatureUntil = signatureStartTime + signatureDuration;
+          signatureDripUntil = signatureUntil + signatureDripDuration;
+          signatureAssignments = null;
+          buildSignatureSlots();
+          setStatus('Signature — bouncing to center…');
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Signature — forming shape…'); }, signatureDuration * 0.3);
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Signature — holding shape…'); }, signatureDuration * 0.35);
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Signature — forming ball…'); }, signatureDuration * 0.65);
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Signature — gently pouring out…'); }, signatureDuration + 300);
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, signatureDuration + signatureDripDuration + 600);
+        }
+
+        var horseUntil = 0;
+        var horseStartTime = 0;
+        var horseDripUntil = 0;
+        var horseDuration = 10000;
+        var horseHoldDuration = 3000;
+        var horseDripDuration = 2600;
+        var horseDripSettleMs = 300;
+        var horseCenterX = halfW;
+        var horseCenterY = halfH;
+        var horseBallRadius = 0.5;
+        var horseScale = 1.35;
+        var horseNumSlots = 1000;
+        var horseSlotPositions = [];
+        var horseAssignments = null;
+        // Use traced outline from horse_outline.js (1000 points) if available; else resample built-in to 1000.
+        function resampleOutlineToN(path, n) {
+          var len = path.length >> 1;
+          if (len < 2) return path;
+          var segLen = [];
+          var total = 0;
+          for (var s = 0; s < len; s++) {
+            var i0 = s * 2, i1 = ((s + 1) % len) * 2;
+            var dx = path[i1] - path[i0], dy = path[i1 + 1] - path[i0 + 1];
+            var L = Math.sqrt(dx * dx + dy * dy) + 1e-9;
+            segLen.push({ start: total, length: L, i0: i0, i1: i1 });
+            total += L;
+          }
+          var out = [];
+          for (var k = 0; k < n; k++) {
+            var u = (total > 0 && n > 1) ? (k / (n - 1)) * total : 0;
+            if (u >= total) u = total - 1e-9;
+            for (var s = 0; s < segLen.length; s++) {
+              var seg = segLen[s];
+              if (u <= seg.start + seg.length) {
+                var t = (u - seg.start) / (seg.length + 1e-9);
+                t = Math.max(0, Math.min(1, t));
+                out.push(path[seg.i0] + t * (path[seg.i1] - path[seg.i0]));
+                out.push(path[seg.i0 + 1] + t * (path[seg.i1 + 1] - path[seg.i0 + 1]));
+                break;
+              }
+            }
+          }
+          return out;
+        }
+        var horseOutline = (function () {
+          // Built-in rearing horse outline (normalized 0-1, center 0.5,0.5) used only as a fallback.
+          var main = [
+            0.14, 0.20, 0.16, 0.23, 0.18, 0.25, 0.20, 0.24, 0.22, 0.26, 0.24, 0.28, 0.26, 0.30, 0.28, 0.34, 0.29, 0.38, 0.30, 0.42, 0.30, 0.44, 0.29, 0.46, 0.27, 0.47, 0.25, 0.48, 0.23, 0.48, 0.21, 0.49, 0.23, 0.51, 0.26, 0.53, 0.30, 0.55, 0.34, 0.57, 0.38, 0.58, 0.42, 0.60, 0.46, 0.62, 0.48, 0.64,
+            0.46, 0.62, 0.44, 0.58, 0.42, 0.54, 0.40, 0.50, 0.38, 0.46, 0.36, 0.42, 0.34, 0.38,
+            0.36, 0.40, 0.38, 0.44, 0.40, 0.48, 0.42, 0.52, 0.44, 0.56, 0.46, 0.60, 0.48, 0.63,
+            0.50, 0.65, 0.54, 0.68, 0.58, 0.70, 0.62, 0.72, 0.66, 0.73, 0.70, 0.73, 0.74, 0.72, 0.76, 0.70,
+            0.77, 0.68, 0.78, 0.64, 0.79, 0.60, 0.80, 0.58, 0.82, 0.62, 0.83, 0.66, 0.84, 0.70, 0.84, 0.72, 0.82, 0.74,
+            0.83, 0.72, 0.84, 0.68, 0.85, 0.64, 0.86, 0.60, 0.87, 0.58, 0.87, 0.62, 0.87, 0.66, 0.86, 0.70, 0.85, 0.73,
+            0.83, 0.71, 0.82, 0.67, 0.80, 0.63, 0.78, 0.60, 0.76, 0.56, 0.74, 0.50, 0.72, 0.44, 0.70, 0.38, 0.68, 0.34, 0.66, 0.30, 0.63, 0.28, 0.58, 0.26, 0.52, 0.25, 0.46, 0.24, 0.40, 0.24, 0.34, 0.23, 0.28, 0.23, 0.22, 0.22, 0.18, 0.21, 0.14, 0.20
+          ];
+          if (window.HORSE_OUTLINE_1000 && Array.isArray(window.HORSE_OUTLINE_1000) && window.HORSE_OUTLINE_1000.length >= 200) {
+            return [window.HORSE_OUTLINE_1000];
+          }
+          return [resampleOutlineToN(main, 1000)];
+        })();
+        horseNumSlots = horseOutline[0].length >> 1;
+        var horseOutlineClosed = [true];
+
+        function horseOutlineSegments(fn) {
+          var paths = horseOutline;
+          var closed = horseOutlineClosed;
+          for (var p = 0; p < paths.length; p++) {
+            var path = paths[p];
+            var n = path.length >> 1;
+            var isClosed = closed[p];
+            for (var s = 0; s < (isClosed ? n : n - 1); s++) {
+              var i0 = s * 2;
+              var i1 = (isClosed ? (s + 1) % n : s + 1) * 2;
+              fn(path[i0], path[i0 + 1], path[i1], path[i1 + 1], p, s);
+            }
+          }
+        }
+
+        function horseOutlineSegmentsMainOnly(fn) {
+          var path = horseOutline[0];
+          var n = path.length >> 1;
+          for (var s = 0; s < n; s++) {
+            var i0 = s * 2;
+            var i1 = ((s + 1) % n) * 2;
+            fn(path[i0], path[i0 + 1], path[i1], path[i1 + 1]);
+          }
+        }
+
+        function buildHorseSlots() {
+          // Prefer explicit pixel map from particle_map.json if available.
+          if (horsePixelRaw && horsePixelRaw.length) {
+            var minX = horsePixelRaw[0].x, maxX = horsePixelRaw[0].x;
+            var minY = horsePixelRaw[0].y, maxY = horsePixelRaw[0].y;
+            for (var i = 1; i < horsePixelRaw.length; i++) {
+              var p = horsePixelRaw[i];
+              if (p.x < minX) minX = p.x;
+              if (p.x > maxX) maxX = p.x;
+              if (p.y < minY) minY = p.y;
+              if (p.y > maxY) maxY = p.y;
+            }
+            var cx = (minX + maxX) * 0.5;
+            var cy = (minY + maxY) * 0.5;
+            var span = Math.max(maxX - minX, maxY - minY, 1e-6);
+            horseSlotPositions = [];
+            for (var j = 0; j < horsePixelRaw.length; j++) {
+              var hp = horsePixelRaw[j];
+              var nx = (hp.x - cx) / span; // ~[-0.5,0.5]
+              var ny = -(hp.y - cy) / span; // flip because JSON is y-up, Box2D/canvas is y-down
+              var wx = horseCenterX + nx * 2 * horseScale;
+              var wy = horseCenterY + ny * 2 * horseScale;
+              horseSlotPositions.push({ x: wx, y: wy });
+            }
+            horseNumSlots = horseSlotPositions.length;
+            return;
+          }
+          // Fallback: build evenly spaced slots along analytic outline.
+          var segList = [];
+          var total = 0;
+          horseOutlineSegmentsMainOnly(function (x0, y0, x1, y1) {
+            var p0 = horseToWorld(x0, y0), p1 = horseToWorld(x1, y1);
+            var len = Math.sqrt((p1.x - p0.x) * (p1.x - p0.x) + (p1.y - p0.y) * (p1.y - p0.y));
+            segList.push({ start: total, length: len, x0: x0, y0: y0, x1: x1, y1: y1 });
+            total += len;
+          });
+          horseSlotPositions = [];
+          for (var k = 0; k < horseNumSlots; k++) {
+            var u = (k / (horseNumSlots - 1)) * total;
+            for (var s = 0; s < segList.length; s++) {
+              var seg = segList[s];
+              if (u <= seg.start + seg.length) {
+                var t = (u - seg.start) / (seg.length + 1e-6);
+                t = Math.max(0, Math.min(1, t));
+                var p0 = horseToWorld(seg.x0, seg.y0), p1 = horseToWorld(seg.x1, seg.y1);
+                horseSlotPositions.push({ x: p0.x + t * (p1.x - p0.x), y: p0.y + t * (p1.y - p0.y) });
+                break;
+              }
+            }
+          }
+        }
+
+        function getClosestPointOnHorseWithArcLength(px, py) {
+          var bestDist = 1e9, bestX = horseCenterX, bestY = horseCenterY, bestArc = 0;
+          var arcSoFar = 0;
+          horseOutlineSegmentsMainOnly(function (x0, y0, x1, y1) {
+            var p0 = horseToWorld(x0, y0), p1 = horseToWorld(x1, y1);
+            var q = getClosestPointOnSegment(px, py, p0.x, p0.y, p1.x, p1.y);
+            var d = (px - q.x) * (px - q.x) + (py - q.y) * (py - q.y);
+            var segLen = Math.sqrt((p1.x - p0.x) * (p1.x - p0.x) + (p1.y - p0.y) * (p1.y - p0.y));
+            var localT = Math.sqrt((q.x - p0.x) * (q.x - p0.x) + (q.y - p0.y) * (q.y - p0.y)) / (segLen + 1e-6);
+            var arc = arcSoFar + localT * segLen;
+            if (d < bestDist) { bestDist = d; bestX = q.x; bestY = q.y; bestArc = arc; }
+            arcSoFar += segLen;
+          });
+          return { x: bestX, y: bestY, arc: bestArc };
+        }
+
+        function horseToWorld(nx, ny) {
+          return { x: horseCenterX + (nx - 0.5) * 2 * horseScale, y: horseCenterY + (ny - 0.5) * 2 * horseScale };
+        }
+
+        function getClosestPointOnSegment(px, py, x1, y1, x2, y2) {
+          var dx = x2 - x1, dy = y2 - y1;
+          var len = Math.sqrt(dx * dx + dy * dy) + 1e-6;
+          var t = ((px - x1) * dx + (py - y1) * dy) / (len * len);
+          t = Math.max(0, Math.min(1, t));
+          return { x: x1 + t * dx, y: y1 + t * dy };
+        }
+
+        function getClosestPointOnHorse(px, py) {
+          var bestDist = 1e9, bestX = horseCenterX, bestY = horseCenterY;
+          horseOutlineSegmentsMainOnly(function (x0, y0, x1, y1) {
+            var p0 = horseToWorld(x0, y0), p1 = horseToWorld(x1, y1);
+            var q = getClosestPointOnSegment(px, py, p0.x, p0.y, p1.x, p1.y);
+            var d = (px - q.x) * (px - q.x) + (py - q.y) * (py - q.y);
+            if (d < bestDist) { bestDist = d; bestX = q.x; bestY = q.y; }
+          });
+          return { x: bestX, y: bestY };
+        }
+
+        function applyHorseToSystem(ps, systemIndex) {
+          var count = ps.GetParticleCount();
+          if (count === 0) return;
+          if (!lf.HEAPF32) return;
+          var now = performance.now();
+          var t = (now - horseStartTime) / horseDuration;
+          if (t < 0 || t > 1) return;
+          var posBuf = ps.GetPositionBuffer();
+          var velBuf = ps.GetVelocityBuffer();
+          var posPtr = lf.getPointer(posBuf);
+          var velPtr = lf.getPointer(velBuf);
+          if (!posPtr || !velPtr) return;
+          var posBase = posPtr >> 2;
+          var velBase = velPtr >> 2;
+
+          if (t >= 0.2 && t < 0.65) {
+            if (!horseAssignments) {
+              horseAssignments = [];
+              var systems = [waterSystem, oilSystem, elasticSystem, tensileSystem, gelSystem, noodleSystem, flameSystem];
+              for (var si = 0; si < systems.length; si++) {
+                var sys = systems[si];
+                var c = sys.GetParticleCount();
+                var slots = [];
+                if (c === 0 || horseNumSlots <= 0) { horseAssignments[si] = slots; continue; }
+                for (var i = 0; i < c; i++) {
+                  slots[i] = i % horseNumSlots;
+                }
+                horseAssignments[si] = slots;
+              }
+            }
+            var slots = horseAssignments[systemIndex];
+            if (slots && horseSlotPositions.length > 0) {
+              for (var i = 0; i < count; i++) {
+                var slotIndex = slots[i];
+                if (slotIndex === undefined) continue;
+                var target = horseSlotPositions[slotIndex];
+                if (!target) continue;
+                var px = lf.HEAPF32[posBase + i * 2];
+                var py = lf.HEAPF32[posBase + i * 2 + 1];
+                if (px !== px || py !== py) continue;
+                var dx = target.x - px, dy = target.y - py;
+                var dist = Math.sqrt(dx * dx + dy * dy) + 0.01;
+                var pull = 8.0 / dist;
+                lf.HEAPF32[velBase + i * 2] += dx * pull;
+                lf.HEAPF32[velBase + i * 2 + 1] += dy * pull;
+              }
+            }
+            return;
+          }
+
+          for (var i = 0; i < count; i++) {
+            var px = lf.HEAPF32[posBase + i * 2];
+            var py = lf.HEAPF32[posBase + i * 2 + 1];
+            if (px !== px || py !== py) continue;
+            var vx = 0, vy = 0;
+            if (t < 0.2) {
+              var dx = horseCenterX - px, dy = horseCenterY - py;
+              var dist = Math.sqrt(dx * dx + dy * dy) + 0.02;
+              var pull = 5.0 / dist;
+              vx = dx * pull;
+              vy = dy * pull;
+            } else {
+              var dx = horseCenterX - px, dy = horseCenterY - py;
+              var dist = Math.sqrt(dx * dx + dy * dy) + 0.02;
+              var pull = 6.0 / dist;
+              vx = dx * pull;
+              vy = dy * pull;
+            }
+            lf.HEAPF32[velBase + i * 2] += vx;
+            lf.HEAPF32[velBase + i * 2 + 1] += vy;
+          }
+        }
+
+        function applyHorseAll() {
+          applyHorseToSystem(waterSystem, 0);
+          applyHorseToSystem(oilSystem, 1);
+          applyHorseToSystem(elasticSystem, 2);
+          applyHorseToSystem(tensileSystem, 3);
+          applyHorseToSystem(gelSystem, 4);
+          applyHorseToSystem(noodleSystem, 5);
+          applyHorseToSystem(flameSystem, 6);
+        }
+
+        function applyHorseDripToSystem(ps, isSpringParticles) {
+          var count = ps.GetParticleCount();
+          if (count === 0) return;
+          if (!lf.HEAPF32) return;
+          var now = performance.now();
+          var elapsed = now - horseUntil;
+          var posBuf = ps.GetPositionBuffer();
+          var velBuf = ps.GetVelocityBuffer();
+          var posPtr = lf.getPointer(posBuf);
+          var velPtr = lf.getPointer(velBuf);
+          if (!posPtr || !velPtr) return;
+          var posBase = posPtr >> 2;
+          var velBase = velPtr >> 2;
+          var dripRadius = horseBallRadius + 0.2;
+          for (var i = 0; i < count; i++) {
+            var px = lf.HEAPF32[posBase + i * 2];
+            var py = lf.HEAPF32[posBase + i * 2 + 1];
+            if (px !== px || py !== py) continue;
+            var dx = px - horseCenterX;
+            var dy = py - horseCenterY;
+            var dist = Math.sqrt(dx * dx + dy * dy);
+            if (dist > dripRadius) continue;
+            var vx = lf.HEAPF32[velBase + i * 2];
+            var vy = lf.HEAPF32[velBase + i * 2 + 1];
+            if (elapsed < horseDripSettleMs) {
+              if (isSpringParticles) {
+                lf.HEAPF32[velBase + i * 2] = vx * 0.2;
+                lf.HEAPF32[velBase + i * 2 + 1] = vy * 0.2;
+              } else {
+                lf.HEAPF32[velBase + i * 2] = 0;
+                lf.HEAPF32[velBase + i * 2 + 1] = 0;
+              }
+            } else {
+              var gentleDown = 0.28;
+              var gentleSpread = 0.06;
+              lf.HEAPF32[velBase + i * 2] = dx * gentleSpread;
+              lf.HEAPF32[velBase + i * 2 + 1] = gentleDown;
+            }
+          }
+        }
+
+        function applyHorseDripAll() {
+          applyHorseDripToSystem(waterSystem);
+          applyHorseDripToSystem(oilSystem);
+          applyHorseDripToSystem(elasticSystem);
+          applyHorseDripToSystem(tensileSystem);
+          applyHorseDripToSystem(gelSystem);
+          applyHorseDripToSystem(flameSystem);
+          applyHorseDripToSystem(noodleSystem, true);
+        }
+
+        function startHorse() {
+          horseStartTime = performance.now();
+          horseUntil = horseStartTime + horseDuration;
+          horseDripUntil = horseUntil + horseDripDuration;
+          horseAssignments = null;
+          buildHorseSlots();
+          setStatus('Horse — sucking to center…');
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Horse — forming shape…'); }, horseDuration * 0.2);
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Horse — holding shape (3s)…'); }, horseDuration * 0.35);
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Horse — forming ball…'); }, horseDuration * 0.65);
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Horse — dripping down…'); }, horseDuration + 400);
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, horseDuration + horseDripDuration + 400);
         }
 
         var ballRadius = 0.18;
@@ -245,9 +2075,9 @@
         circle.set_m_p(circleCenter);
         var ballFd = new lf.b2FixtureDef();
         ballFd.set_shape(circle);
-        ballFd.set_density(0.8);
-        ballFd.set_friction(0.4);
-        ballFd.set_restitution(0.3);
+        ballFd.set_density(2.5);
+        ballFd.set_friction(0.2);
+        ballFd.set_restitution(0.1);
         ballBody.CreateFixture(ballFd);
         lf.destroy(circle);
         lf.destroy(circleCenter);
@@ -255,6 +2085,7 @@
 
         var mouseJoint = null;
         var lastPointerWorld = null;
+        var ballDragging = false;
 
         var ballMin = 0.25;
         var ballMax = 5.75;
@@ -284,11 +2115,9 @@
 
         function resetBall() {
           if (!ballBody) return;
-          if (mouseJoint) {
-            world.DestroyJoint(mouseJoint);
-            mouseJoint = null;
-            lastPointerWorld = null;
-          }
+          mouseJoint = null;
+          lastPointerWorld = null;
+          ballDragging = false;
           var c = new lf.b2Vec2(halfW, halfH);
           var zero = new lf.b2Vec2(0, 0);
           ballBody.SetTransform(c, 0);
@@ -305,11 +2134,53 @@
           return { x: cx / SCALE, y: cy / SCALE };
         }
 
-        var ballHitRadius = ballRadius * 2.2;
+        var ballHitRadius = ballRadius * 4.0;
 
         function onPointerDown(e) {
           if (!window.particleSandboxReady || !ballBody) return;
           var w = canvasToWorld(e.clientX, e.clientY);
+          // Prefer clicking wok handle if present.
+          if (wokBody) {
+            var wPos = wokBody.GetPosition();
+            var wx = wPos.get_x();
+            var wy = wPos.get_y();
+            // Pointer in wok-local coordinates.
+            var lx = w.x - wx;
+            var ly = w.y - wy;
+            // Handle is a rectangle on the right side of the wok.
+            var handleLeft = wokRadius;
+            var handleRight = wokRadius + wokHandleLen;
+            if (lx >= handleLeft && lx <= handleRight && Math.abs(ly) <= wokHandleHalfHeight) {
+              e.preventDefault();
+              try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
+              canvas.style.cursor = 'grabbing';
+              wokDragging = true;
+              wokLastPointerWorld = { x: w.x, y: w.y };
+              // Remember where the pointer is relative to the wok center so it doesn't jump.
+              wokDragOffset = { dx: w.x - wx, dy: w.y - wy };
+              setStatus('Drag the wok by its handle');
+              var moveW = function (ev) {
+                if (wokDragging) {
+                  wokLastPointerWorld = canvasToWorld(ev.clientX, ev.clientY);
+                }
+              };
+              var upW = function () {
+                try { canvas.releasePointerCapture(e.pointerId); } catch (err) {}
+                document.removeEventListener('pointermove', moveW);
+                document.removeEventListener('pointerup', upW);
+                document.removeEventListener('pointercancel', upW);
+                canvas.style.cursor = 'grab';
+                wokLastPointerWorld = null;
+                wokDragOffset = null;
+                wokDragging = false;
+              };
+              document.addEventListener('pointermove', moveW);
+              document.addEventListener('pointerup', upW);
+              document.addEventListener('pointercancel', upW);
+              return;
+            }
+          }
+
           var pos = ballBody.GetPosition();
           var bx = pos.get_x();
           var by = pos.get_y();
@@ -317,54 +2188,41 @@
           var dy = w.y - by;
           if (dx * dx + dy * dy < ballHitRadius * ballHitRadius) {
             e.preventDefault();
-            e.currentTarget.setPointerCapture(e.pointerId);
-            if (mouseJoint) {
-              world.DestroyJoint(mouseJoint);
-              mouseJoint = null;
-            }
-            lastPointerWorld = { x: bx, y: by };
-            var mjd = new lf.b2MouseJointDef();
-            mjd.set_bodyA(groundBody);
-            mjd.set_bodyB(ballBody);
-            var target = new lf.b2Vec2(bx, by);
-            mjd.set_target(target);
-            mjd.set_maxForce(1200);
-            mjd.set_stiffness(80);
-            mjd.set_damping(10);
-            mouseJoint = world.CreateJoint(mjd);
-            lf.destroy(target);
-            lf.destroy(mjd);
+            try { e.currentTarget.setPointerCapture(e.pointerId); } catch (err) {}
+            canvas.style.cursor = 'grabbing';
+            ballDragging = true;
+            lastPointerWorld = { x: w.x, y: w.y };
+            setStatus('Drag the ball to disturb particles');
             var move = function (ev) {
-              if (mouseJoint) {
+              if (ballDragging) {
                 lastPointerWorld = canvasToWorld(ev.clientX, ev.clientY);
               }
             };
             var up = function () {
               try { canvas.releasePointerCapture(e.pointerId); } catch (err) {}
+              document.removeEventListener('pointermove', move);
+              document.removeEventListener('pointerup', up);
+              document.removeEventListener('pointercancel', up);
+              canvas.style.cursor = 'grab';
               lastPointerWorld = null;
-              if (mouseJoint) {
-                world.DestroyJoint(mouseJoint);
-                mouseJoint = null;
-              }
-              canvas.removeEventListener('pointermove', move);
-              canvas.removeEventListener('pointerup', up);
-              canvas.removeEventListener('pointercancel', up);
+              ballDragging = false;
             };
-            canvas.addEventListener('pointermove', move);
-            canvas.addEventListener('pointerup', up);
-            canvas.addEventListener('pointercancel', up);
+            document.addEventListener('pointermove', move);
+            document.addEventListener('pointerup', up);
+            document.addEventListener('pointercancel', up);
           }
         }
         canvas.addEventListener('pointerdown', onPointerDown);
 
         function pourWater() {
           var pgd = new lf.b2ParticleGroupDef();
-          pgd.set_flags(lf.b2_waterParticle | lf.b2_colorMixingParticle);
+          // Oil is explicitly viscous so it oozes rather than splashes.
+          pgd.set_flags(lf.b2_viscousParticle | lf.b2_colorMixingParticle);
           var p = new lf.b2Vec2(0.2 + Math.random() * 5.6, 0.25);
-          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.5, 0.8 + Math.random() * 0.4);
-          var color = new lf.b2ParticleColor(0.55, 0.78, 1, 1);
+          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.3, 0.6 + Math.random() * 0.3);
+          var color = new lf.b2ParticleColor(1, 0.95, 0.25, 0.95);
           var shape = new lf.b2CircleShape();
-          shape.set_m_radius(0.12);
+          shape.set_m_radius(0.1);
           var center = new lf.b2Vec2(0, 0);
           shape.set_m_p(center);
           pgd.set_position(p);
@@ -379,18 +2237,19 @@
           lf.destroy(shape);
           lf.destroy(pgd);
           var n = waterSystem.GetParticleCount();
-          setStatus('Water added — ' + n + ' particles');
+          setStatus('Oil added — ' + n + ' fluid particles');
           setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, 1500);
         }
 
         function pourOil() {
           var pgd = new lf.b2ParticleGroupDef();
-          pgd.set_flags(lf.b2_viscousParticle | lf.b2_colorMixingParticle);
+          // Water is basic fluid but with tensile flag so it stretches into filaments and clumps.
+          pgd.set_flags(lf.b2_waterParticle | lf.b2_tensileParticle | lf.b2_colorMixingParticle);
           var p = new lf.b2Vec2(0.2 + Math.random() * 5.6, 0.25);
-          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.3, 0.6 + Math.random() * 0.3);
-          var color = new lf.b2ParticleColor(1, 0.95, 0.25, 0.95);
+          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.5, 0.8 + Math.random() * 0.4);
+          var color = new lf.b2ParticleColor(0.55, 0.78, 1, 1);
           var shape = new lf.b2CircleShape();
-          shape.set_m_radius(0.1);
+          shape.set_m_radius(0.12);
           var center = new lf.b2Vec2(0, 0);
           shape.set_m_p(center);
           pgd.set_position(p);
@@ -405,7 +2264,7 @@
           lf.destroy(shape);
           lf.destroy(pgd);
           var n = oilSystem.GetParticleCount();
-          setStatus('Oil added — ' + n + ' fluid particles');
+          setStatus('Water added — ' + n + ' particles');
           setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, 1500);
         }
 
@@ -432,6 +2291,177 @@
           lf.destroy(pgd);
           var n = elasticSystem.GetParticleCount();
           setStatus('Elastic (bouncy) added — ' + n + ' particles');
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, 1500);
+        }
+
+        // Beef strips: long, floppy red strips. When they touch a surface they become
+        // sticky and stop moving; when launched back into the air they lose stickiness
+        // and only become sticky again on the next surface contact.
+        function addBeefStrips() {
+          var pgd = new lf.b2ParticleGroupDef();
+          pgd.set_flags(lf.b2_springParticle | lf.b2_colorMixingParticle);
+          var len = 0.25 + Math.random() * 0.15;
+          var thick = 0.04;
+          var px = 0.8 + Math.random() * 4.4;
+          var py = 0.6 + Math.random() * 1.8;
+          var p = new lf.b2Vec2(px, py);
+          var angle = (Math.random() - 0.5) * Math.PI * 0.6;
+          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.3, (Math.random() - 0.5) * 0.1);
+          // Red colour for beef strips.
+          var color = new lf.b2ParticleColor(0.86, 0.18, 0.22, 0.98);
+          var poly = new lf.b2PolygonShape();
+          poly.SetAsBox(len, thick);
+          pgd.set_position(p);
+          pgd.set_angle(angle);
+          pgd.set_linearVelocity(v);
+          pgd.set_color(color);
+          pgd.set_shape(poly);
+          var group = noodleSystem.CreateParticleGroup(pgd);
+          if (group) {
+            noodleGroups.push({ group: group, stuck: false });
+          }
+          lf.destroy(p);
+          lf.destroy(v);
+          lf.destroy(color);
+          lf.destroy(poly);
+          lf.destroy(pgd);
+          var n = noodleSystem.GetParticleCount();
+          setStatus('Beef strips added — ' + n + ' noodle particles');
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, 1500);
+        }
+
+        // Prawn: small, slightly bouncy blobs with a pink/orange color.
+        function addPrawn() {
+          var pgd = new lf.b2ParticleGroupDef();
+          pgd.set_flags(lf.b2_elasticParticle | lf.b2_colorMixingParticle);
+          var p = new lf.b2Vec2(0.4 + Math.random() * 4.0, 0.5 + Math.random() * 1.0);
+          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.4, 0.4 + Math.random() * 0.2);
+          var color = new lf.b2ParticleColor(1.0, 0.72, 0.55, 0.96);
+          var shape = new lf.b2CircleShape();
+          shape.set_m_radius(0.09);
+          var center = new lf.b2Vec2(0, 0);
+          shape.set_m_p(center);
+          pgd.set_position(p);
+          pgd.set_linearVelocity(v);
+          pgd.set_color(color);
+          pgd.set_shape(shape);
+          elasticSystem.CreateParticleGroup(pgd);
+          lf.destroy(p);
+          lf.destroy(v);
+          lf.destroy(color);
+          lf.destroy(center);
+          lf.destroy(shape);
+          lf.destroy(pgd);
+          var n = elasticSystem.GetParticleCount();
+          setStatus('Prawn added — ' + n + ' particles');
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, 1500);
+        }
+
+        // Kai lan: leafy green clumps that are light and cohesive (tensile).
+        function addKaiLan() {
+          var pgd = new lf.b2ParticleGroupDef();
+          pgd.set_flags(lf.b2_tensileParticle | lf.b2_colorMixingParticle);
+          var p = new lf.b2Vec2(0.6 + Math.random() * 4.0, 0.4 + Math.random() * 1.4);
+          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.35, 0.6 + Math.random() * 0.3);
+          var color = new lf.b2ParticleColor(0.25, 0.7, 0.3, 0.95);
+          var shape = new lf.b2CircleShape();
+          shape.set_m_radius(0.14);
+          var center = new lf.b2Vec2(0, 0);
+          shape.set_m_p(center);
+          pgd.set_position(p);
+          pgd.set_linearVelocity(v);
+          pgd.set_color(color);
+          pgd.set_shape(shape);
+          tensileSystem.CreateParticleGroup(pgd);
+          lf.destroy(p);
+          lf.destroy(v);
+          lf.destroy(color);
+          lf.destroy(center);
+          lf.destroy(shape);
+          lf.destroy(pgd);
+          var n = tensileSystem.GetParticleCount();
+          setStatus('Kai lan added — ' + n + ' particles');
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, 1500);
+        }
+
+        // Chopped garlic: small, light off‑white chunks.
+        function addGarlic() {
+          var pgd = new lf.b2ParticleGroupDef();
+          pgd.set_flags(lf.b2_powderParticle | lf.b2_colorMixingParticle);
+          var p = new lf.b2Vec2(0.8 + Math.random() * 4.0, 0.3 + Math.random() * 0.6);
+          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.4, 0.6 + Math.random() * 0.4);
+          var color = new lf.b2ParticleColor(0.98, 0.96, 0.88, 0.96);
+          var shape = new lf.b2CircleShape();
+          shape.set_m_radius(0.06);
+          var center = new lf.b2Vec2(0, 0);
+          shape.set_m_p(center);
+          pgd.set_position(p);
+          pgd.set_linearVelocity(v);
+          pgd.set_color(color);
+          pgd.set_shape(shape);
+          gelSystem.CreateParticleGroup(pgd);
+          lf.destroy(p);
+          lf.destroy(v);
+          lf.destroy(color);
+          lf.destroy(center);
+          lf.destroy(shape);
+          lf.destroy(pgd);
+          var n = gelSystem.GetParticleCount();
+          setStatus('Chopped garlic added — ' + n + ' particles');
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, 1500);
+        }
+
+        // Chopped ginger: small yellowish chunks, slightly denser than garlic.
+        function addGinger() {
+          var pgd = new lf.b2ParticleGroupDef();
+          pgd.set_flags(lf.b2_powderParticle | lf.b2_colorMixingParticle);
+          var p = new lf.b2Vec2(0.8 + Math.random() * 4.0, 0.3 + Math.random() * 0.6);
+          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.4, 0.7 + Math.random() * 0.4);
+          var color = new lf.b2ParticleColor(0.96, 0.88, 0.55, 0.96);
+          var shape = new lf.b2CircleShape();
+          shape.set_m_radius(0.06);
+          var center = new lf.b2Vec2(0, 0);
+          shape.set_m_p(center);
+          pgd.set_position(p);
+          pgd.set_linearVelocity(v);
+          pgd.set_color(color);
+          pgd.set_shape(shape);
+          gelSystem.CreateParticleGroup(pgd);
+          lf.destroy(p);
+          lf.destroy(v);
+          lf.destroy(color);
+          lf.destroy(center);
+          lf.destroy(shape);
+          lf.destroy(pgd);
+          var n = gelSystem.GetParticleCount();
+          setStatus('Chopped ginger added — ' + n + ' particles');
+          setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, 1500);
+        }
+
+        // Soy sauce: dark, low‑viscosity fluid that behaves a lot like water but darker.
+        function addSoySauce() {
+          var pgd = new lf.b2ParticleGroupDef();
+          pgd.set_flags(lf.b2_waterParticle | lf.b2_colorMixingParticle);
+          var p = new lf.b2Vec2(0.3 + Math.random() * 5.2, 0.25);
+          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.45, 0.9 + Math.random() * 0.4);
+          var color = new lf.b2ParticleColor(0.18, 0.10, 0.05, 0.96);
+          var shape = new lf.b2CircleShape();
+          shape.set_m_radius(0.11);
+          var center = new lf.b2Vec2(0, 0);
+          shape.set_m_p(center);
+          pgd.set_position(p);
+          pgd.set_linearVelocity(v);
+          pgd.set_color(color);
+          pgd.set_shape(shape);
+          tensileSystem.CreateParticleGroup(pgd);
+          lf.destroy(p);
+          lf.destroy(v);
+          lf.destroy(color);
+          lf.destroy(center);
+          lf.destroy(shape);
+          lf.destroy(pgd);
+          var n = tensileSystem.GetParticleCount();
+          setStatus('Soy sauce added — ' + n + ' particles');
           setTimeout(function () { if (window.particleSandboxReady) setStatus('Ready — add particles or gel'); }, 1500);
         }
 
@@ -531,14 +2561,19 @@
 
         function addNoodle() {
           var pgd = new lf.b2ParticleGroupDef();
+          // Springs give a floppy feel, but with strong system damping they quickly settle.
           pgd.set_flags(lf.b2_springParticle | lf.b2_colorMixingParticle);
-          var len = 0.2 + Math.random() * 0.25;
-          var thick = 0.052 + Math.random() * 0.01;
+          var len = 0.22 + Math.random() * 0.2;
+          // Three-particle-thick noodle: thickness ≈ 3 particle diameters.
+          // With noodleSystem radius = 0.012, this means full width ≈ 6 * radius.
+          // SetAsBox takes half-height, so thick = 3 * radius = 0.036.
+          var thick = 0.036;
           var px = 0.8 + Math.random() * 4.4;
-          var py = 0.5 + Math.random() * 2;
+          var py = 0.6 + Math.random() * 1.8;
           var p = new lf.b2Vec2(px, py);
           var angle = (Math.random() - 0.5) * Math.PI * 0.7;
-          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.1, (Math.random() - 0.5) * 0.1);
+          // Small initial velocity so it can flop a bit but not bounce wildly.
+          var v = new lf.b2Vec2((Math.random() - 0.5) * 0.05, (Math.random() - 0.5) * 0.05);
           var r = 0.96 + Math.random() * 0.04;
           var g = 0.96 + Math.random() * 0.04;
           var b = 0.96 + Math.random() * 0.04;
@@ -550,7 +2585,10 @@
           pgd.set_linearVelocity(v);
           pgd.set_color(color);
           pgd.set_shape(poly);
-          noodleSystem.CreateParticleGroup(pgd);
+          var group = noodleSystem.CreateParticleGroup(pgd);
+          if (group) {
+            noodleGroups.push({ group: group, stuck: false });
+          }
           lf.destroy(p);
           lf.destroy(v);
           lf.destroy(color);
@@ -637,67 +2675,214 @@
         function physicsLoop(now) {
           requestAnimationFrame(physicsLoop);
           if (!ctx) return;
-          var dt = Math.min(((now - lastT) / 1000) || 1/60, 1/10);
-          lastT = now;
+          try {
+            var dt = Math.min(((now - lastT) / 1000) || 1/60, 1/10);
+            lastT = now;
 
-          if (mouseJoint && lastPointerWorld) {
-            var t = new lf.b2Vec2(lastPointerWorld.x, lastPointerWorld.y);
-            mouseJoint.SetTarget(t);
-            lf.destroy(t);
-          }
-
-          var steps = Math.max(1, Math.ceil(dt / (1/60)));
-          for (var s = 0; s < steps; s++) {
+            var steps = Math.max(1, Math.ceil(dt / (1/60)));
+            for (var s = 0; s < steps; s++) {
+              if (now < funnelUntil) applyFunnelAll();
+              else if (now < funnelDripUntil) applyFunnelDripAll();
+              if (now < starUntil) applyStarAll();
+              else if (now < starDripUntil) applyStarDripAll();
+              if (now < horseUntil) applyHorseAll();
+              else if (now < horseDripUntil) applyHorseDripAll();
             if (now < tornadoUntil) applyTornadoAll();
-            world.Step(1/60, 8, 3, particleIterations);
-          }
-
-          clampBallToContainer();
-
-          ctx.clearRect(0, 0, CW, CH);
-          ctx.strokeStyle = '#333';
-          ctx.lineWidth = 2;
-          ctx.strokeRect(1, 1, CW - 2, CH - 2);
-          drawParticles(waterSystem, 'rgba(140,200,255,0.95)');
-          drawParticles(oilSystem, 'rgba(255,242,64,0.95)');
-          drawParticles(elasticSystem, 'rgba(153,77,217,0.95)');
-          drawParticles(tensileSystem, 'rgba(140,97,56,0.92)');
-          drawParticles(gelSystem, 'rgba(235,64,52,0.92)');
-          drawParticles(noodleSystem, 'rgba(250,250,250,0.95)');
-          drawParticles(flameSystem, 'rgba(255,180,60,0.92)');
-
-          if (now < tornadoUntil) {
-            var cx = vortexCenterX * SCALE;
-            var cy = vortexCenterY * SCALE;
-            var pulse = 0.6 + 0.2 * Math.sin(now * 0.01);
-            ctx.save();
-            ctx.globalAlpha = 0.25 * pulse;
-            ctx.strokeStyle = '#aaa';
-            ctx.lineWidth = 2;
-            ctx.beginPath();
-            for (var r = 20; r < 220; r += 12) {
-              var a = (now * 0.003) * (r / 80);
-              var x = cx + Math.cos(a) * r;
-              var y = cy + Math.sin(a) * r;
-              if (r === 20) ctx.moveTo(x, y);
-              else ctx.lineTo(x, y);
+              if (ballDragging && lastPointerWorld && ballBody) {
+                // Teleport ball to pointer and zero velocity so it feels attached to the cursor.
+                var bp = new lf.b2Vec2(lastPointerWorld.x, lastPointerWorld.y);
+                var bzero = new lf.b2Vec2(0, 0);
+                ballBody.SetTransform(bp, ballBody.GetAngle());
+                ballBody.SetLinearVelocity(bzero);
+                lf.destroy(bp);
+                lf.destroy(bzero);
+                try { applyBallDisturbanceAll(); } catch (e) {}
+              }
+              if (wokDragging && wokLastPointerWorld && wokBody) {
+                var targetX = wokLastPointerWorld.x;
+                var targetY = wokLastPointerWorld.y;
+                if (wokDragOffset) {
+                  targetX -= wokDragOffset.dx;
+                  targetY -= wokDragOffset.dy;
+                }
+                var wp = new lf.b2Vec2(targetX, targetY);
+                var wzero = new lf.b2Vec2(0, 0);
+                wokBody.SetTransform(wp, 0);
+                wokBody.SetLinearVelocity(wzero);
+                wokBody.SetAngularVelocity(0);
+                lf.destroy(wp);
+                lf.destroy(wzero);
+              }
+              world.Step(1/60, 8, 3, particleIterations);
+              // Maintain oil-over-water stratification after the physics step.
+              adjustFluidBuoyancy();
             }
-            ctx.stroke();
-            ctx.globalAlpha = 1;
-            ctx.restore();
-          }
 
-          if (ballBody) {
-            var pos = ballBody.GetPosition();
-            var bx = pos.get_x() * SCALE;
-            var by = pos.get_y() * SCALE;
-            ctx.fillStyle = '#555';
-            ctx.strokeStyle = '#777';
+            // Extra per-step damping so noodles feel sticky on contact surfaces.
+            dampNoodlesOnSurfaces();
+
+            clampBallToContainer();
+
+            ctx.clearRect(0, 0, CW, CH);
+            ctx.strokeStyle = '#333';
             ctx.lineWidth = 2;
-            ctx.beginPath();
-            ctx.arc(bx, by, ballRadius * SCALE, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
+            ctx.strokeRect(1, 1, CW - 2, CH - 2);
+
+            // Draw wok boundary if present (visible inverted bowl outline with handle).
+            if (wokBody) {
+              var wPos = wokBody.GetPosition();
+              var wx = wPos.get_x() * SCALE;
+              var wy = wPos.get_y() * SCALE;
+              var baseRadius = (waterSystem && waterSystem.GetRadius ? waterSystem.GetRadius() : 0.018) * SCALE;
+              ctx.save();
+              ctx.globalAlpha = 0.75;
+              ctx.strokeStyle = '#888';
+              // Approximate line width as ~30% thicker again than before.
+              ctx.lineWidth = Math.max(2, baseRadius * 11.7); // 9 * 1.3
+              ctx.beginPath();
+              // Semicircle: match the physical shape (0..π around wok center).
+              ctx.arc(wx, wy, wokRadius * SCALE, 0, Math.PI, false);
+              ctx.stroke();
+
+              // Draw handle rectangle on the right side.
+              var hLenPx = wokHandleLen * SCALE;
+              var hHalfHPx = wokHandleHalfHeight * SCALE;
+              ctx.beginPath();
+              ctx.rect(
+                wx + wokRadius * SCALE,
+                wy - hHalfHPx,
+                hLenPx,
+                hHalfHPx * 2
+              );
+              ctx.stroke();
+              ctx.restore();
+            }
+
+            // Swap display colors: label "Oil" now shows the previous water color,
+            // and label "Water" now shows the previous oil color.
+            drawParticles(waterSystem, 'rgba(255,242,64,0.95)'); // oil color
+            drawParticles(oilSystem, 'rgba(140,200,255,0.95)'); // water color
+            drawParticles(elasticSystem, 'rgba(153,77,217,0.95)');
+            drawParticles(tensileSystem, 'rgba(140,97,56,0.92)');
+            drawParticles(gelSystem, 'rgba(235,64,52,0.92)');
+            drawParticles(noodleSystem, 'rgba(250,250,250,0.95)');
+            drawParticles(flameSystem, 'rgba(255,180,60,0.92)');
+
+            if (now < tornadoUntil) {
+              var cx = vortexCenterX * SCALE;
+              var cy = vortexCenterY * SCALE;
+              var pulse = 0.6 + 0.2 * Math.sin(now * 0.01);
+              ctx.save();
+              ctx.globalAlpha = 0.25 * pulse;
+              ctx.strokeStyle = '#aaa';
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              for (var r = 20; r < 220; r += 12) {
+                var a = (now * 0.003) * (r / 80);
+                var x = cx + Math.cos(a) * r;
+                var y = cy + Math.sin(a) * r;
+                if (r === 20) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+              }
+              ctx.stroke();
+              ctx.globalAlpha = 1;
+              ctx.restore();
+            }
+
+            if (now < funnelUntil) {
+              var funnelT = funnelStartTime ? (now - funnelStartTime) / funnelDuration : 0;
+              ctx.save();
+              ctx.globalAlpha = 0.35;
+              ctx.strokeStyle = '#8a8';
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.moveTo(20, 20);
+              ctx.lineTo(funnelCenterX * SCALE, funnelBottomY * SCALE);
+              ctx.moveTo(CW - 20, 20);
+              ctx.lineTo(funnelCenterX * SCALE, funnelBottomY * SCALE);
+              ctx.stroke();
+              if (funnelT >= 0.72) {
+                var ballR = 25 + (funnelT - 0.72) * 35;
+                ctx.globalAlpha = 0.2;
+                ctx.beginPath();
+                ctx.arc(funnelCenterX * SCALE, funnelBottomY * SCALE, ballR, 0, Math.PI * 2);
+                ctx.fillStyle = '#6a8';
+                ctx.fill();
+                ctx.stroke();
+              }
+              ctx.globalAlpha = 1;
+              ctx.restore();
+            } else if (now < funnelDripUntil) {
+              var dripFade = (funnelDripUntil - now) / funnelDripDuration;
+              ctx.save();
+              ctx.globalAlpha = 0.15 * dripFade;
+              ctx.fillStyle = '#6a8';
+              ctx.beginPath();
+              ctx.arc(funnelCenterX * SCALE, funnelBottomY * SCALE, 55, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.globalAlpha = 1;
+              ctx.restore();
+            }
+
+            if (now < horseUntil) {
+              var horseT = horseStartTime ? (now - horseStartTime) / horseDuration : 0;
+              if (horseT >= 0.2 && horseT < 0.65) {
+                ctx.save();
+                ctx.globalAlpha = 0.4;
+                ctx.strokeStyle = '#c9a';
+                ctx.lineWidth = 2;
+                var paths = horseOutline;
+                var closed = horseOutlineClosed;
+                for (var pi = 0; pi < paths.length; pi++) {
+                  var path = paths[pi];
+                  ctx.beginPath();
+                  for (var h = 0; h < path.length; h += 2) {
+                    var w = horseToWorld(path[h], path[h + 1]);
+                    var sx = w.x * SCALE, sy = w.y * SCALE;
+                    if (h === 0) ctx.moveTo(sx, sy);
+                    else ctx.lineTo(sx, sy);
+                  }
+                  if (closed[pi]) ctx.closePath();
+                  ctx.stroke();
+                }
+                ctx.globalAlpha = 1;
+                ctx.restore();
+              } else if (horseT >= 0.65) {
+                ctx.save();
+                ctx.globalAlpha = 0.2;
+                ctx.fillStyle = '#c9a';
+                ctx.beginPath();
+                ctx.arc(horseCenterX * SCALE, horseCenterY * SCALE, horseBallRadius * SCALE, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.globalAlpha = 1;
+                ctx.restore();
+              }
+            } else if (now < horseDripUntil) {
+              var horseDripFade = (horseDripUntil - now) / horseDripDuration;
+              ctx.save();
+              ctx.globalAlpha = 0.12 * horseDripFade;
+              ctx.fillStyle = '#c9a';
+              ctx.beginPath();
+              ctx.arc(horseCenterX * SCALE, horseCenterY * SCALE, 60, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.globalAlpha = 1;
+              ctx.restore();
+            }
+
+            if (ballBody) {
+              var pos = ballBody.GetPosition();
+              var bx = pos.get_x() * SCALE;
+              var by = pos.get_y() * SCALE;
+              ctx.fillStyle = mouseJoint ? '#44cc66' : '#22aa44';
+              ctx.strokeStyle = mouseJoint ? '#66ee88' : '#338855';
+              ctx.lineWidth = mouseJoint ? 3 : 2;
+              ctx.beginPath();
+              ctx.arc(bx, by, ballRadius * SCALE, 0, Math.PI * 2);
+              ctx.fill();
+              ctx.stroke();
+            }
+          } catch (err) {
+            console.error('physicsLoop error', err);
           }
         }
 
@@ -708,11 +2893,24 @@
         window.addFlame = addFlame;
         window.addGelBlob = addGelBlob;
         window.addNoodle = addNoodle;
+        window.addBeefStrips = addBeefStrips;
+        window.addPrawn = addPrawn;
+        window.addKaiLan = addKaiLan;
+        window.addGarlic = addGarlic;
+        window.addGinger = addGinger;
+        window.addSoySauce = addSoySauce;
+        window.startTornado = startTornado;
+        window.startFunnel = startFunnel;
+        window.startHorse = startHorse;
+        window.startStar = startStar;
+        window.startSignature = startSignature;
+        window.makeWok = makeWok;
         window.clearContainer = function () {
           if (mouseJoint) {
             world.DestroyJoint(mouseJoint);
             mouseJoint = null;
             lastPointerWorld = null;
+            canvas.style.cursor = 'grab';
           }
           resetBall();
           world.DestroyParticleSystem(waterSystem);
@@ -722,12 +2920,25 @@
           world.DestroyParticleSystem(gelSystem);
           world.DestroyParticleSystem(noodleSystem);
           world.DestroyParticleSystem(flameSystem);
-          waterSystem = makeFluidSystem();
-          oilSystem = makeFluidSystem();
+          // Recreate fluid systems with their custom behaviors.
+          waterSystem = makeWaterSystem();
+          oilSystem = makeOilSystem();
           elasticSystem = makeFluidSystem();
           tensileSystem = makeFluidSystem();
           gelSystem = makeFluidSystem();
-          noodleSystem = makeFluidSystem();
+          // Recreate noodle system with its custom parameters.
+          var npsd = new lf.b2ParticleSystemDef();
+          npsd.set_radius(0.012);
+          npsd.set_dampingStrength(0.25);
+          npsd.set_destroyByAge(false);
+          npsd.set_lifetimeGranularity(1 / 60);
+          npsd.set_powderStrength(0.0);
+          npsd.set_colorMixingStrength(0.3);
+          npsd.set_maxCount(8000);
+          noodleSystem = world.CreateParticleSystem(npsd);
+          noodleSystem.SetRadius(0.012);
+          lf.destroy(npsd);
+          noodleGroups = [];
           var fpsd = new lf.b2ParticleSystemDef();
           fpsd.set_radius(0.02);
           fpsd.set_dampingStrength(0.15);

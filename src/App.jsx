@@ -1308,13 +1308,16 @@ export default function App() {
 
         const residueBurnMultiplier = 1 + (state.wokResidue / 30); 
 
-        if (state.heatLevel > 70) {
+        if (state.heatLevel > 80) {
           if (state.isTossing) {
             // WOK HEI REQUIRES OIL!
             if (state.oilLevel > 5) {
-                const wokHeiGain = Math.max(3.0, 8.0 - (state.wokResidue / 20)) * whMult;
+                // Make Wok Hei build more slowly: smaller base gain and stronger
+                // penalty from residue so it takes more sustained tossing to max.
+                const wokHeiGain = Math.max(1.0, 4.0 - (state.wokResidue / 25)) * whMult;
                 newWokHei = Math.min(100, newWokHei + wokHeiGain);
-                setOilLevel(prev => Math.max(0, prev - 1.5)); 
+                // Slightly lower oil drain per Wok Hei tick to match slower gain.
+                setOilLevel(prev => Math.max(0, prev - 0.9)); 
             }
           }
           // Base burn rate; higher when very hot + greasy. Scale up with cook time at high heat (longer cooking = faster burn).
@@ -3119,7 +3122,7 @@ export default function App() {
       `}</style>
 
       {/* --- HEADER --- */}
-      <header className={`shrink-0 bg-neutral-900 border-b border-neutral-800 flex justify-between items-center z-20 shadow-xl relative ${viewport.isLandscape ? 'p-1 md:p-2' : 'p-2 md:p-4'}`}>
+      <header className={`shrink-0 bg-neutral-900 border-b border-neutral-800 flex justify-between items-center z-20 shadow-xl relative ${viewport.isLandscape ? 'p-2 md:p-4' : 'p-4 md:p-8'}`}>
         <div className="flex items-center gap-2 md:gap-4">
           <div className="flex items-center gap-1 md:gap-2">
             <ChefHat className={`w-5 h-5 md:w-7 md:h-7 ${ownedUpgrades.includes('neon_hat') ? 'text-fuchsia-500 drop-shadow-[0_0_10px_#d946ef] animate-pulse' : 'text-orange-500'}`} />
@@ -3156,7 +3159,7 @@ export default function App() {
             {isStoryMode && storyProgress !== null && (
               <div className="flex items-center gap-2 md:gap-3 flex-wrap justify-center">
                 <span className="text-[10px] md:text-xs text-neutral-500 uppercase tracking-widest shrink-0" title="Score">Score</span>
-                <div className="relative w-24 md:w-32 lg:w-40 h-3 md:h-4 bg-neutral-800 rounded-full overflow-hidden border border-neutral-700 shrink-0">
+                <div className="relative w-24 md:w-32 lg:w-40 h-2.5 md:h-3 bg-neutral-800 rounded-full overflow-hidden border border-neutral-700 shrink-0">
                   <div
                     className="h-full bg-gradient-to-r from-yellow-600 to-green-500 transition-all duration-200 rounded-full"
                     style={{ width: `${storyProgress.pct}%` }}
@@ -3166,18 +3169,6 @@ export default function App() {
                   </span>
                 </div>
                 <span className="text-[10px] md:text-xs text-neutral-500 font-mono shrink-0" title="Current / target">{Math.round(Number(storyProgress.current))} / {Math.round(storyProgress.target)}</span>
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] md:text-xs border-l border-neutral-700 pl-2 md:pl-3">
-                  <span className="text-neutral-600 uppercase tracking-wider shrink-0">Objectives:</span>
-                  {getChapterTodos(currentChapter).map(t => (
-                    <span
-                      key={t.id}
-                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md border ${t.done ? 'bg-green-900/30 border-green-700/50 text-green-400' : 'bg-neutral-800/80 border-neutral-700 text-neutral-400'}`}
-                    >
-                      {t.done ? <CheckCircle className="w-3 h-3 shrink-0" /> : <span className="w-3 h-3 shrink-0 rounded-full border border-current" />}
-                      <span className={t.done ? 'line-through' : ''}>{String(t.label)}</span>
-                    </span>
-                  ))}
-                </div>
               </div>
             )}
           </div>
@@ -3951,7 +3942,7 @@ export default function App() {
       {/* --- MAIN GAMEPLAY UI --- */}
       <main className="flex-1 flex flex-col relative min-h-0" style={{ backgroundColor: '#0a0a0a' }}>
         {gameState === 'PLAYING' ? (
-          <GameLoop currentChapter={currentChapter} score={score} cash={cash} setScore={setScore} setCash={setCash} delight={delight} setDelight={setDelight} onRecipeSaved={(recipe) => setCustomRecipes(prev => [...prev, recipe])} isSandbox={!isStoryMode} isRestaurantMode={isRestaurantMode} dailySpecialId={restaurantShiftConfig?.dailySpecialId} contracts={restaurantShiftConfig?.contracts} onShiftEnd={isRestaurantMode ? (stats) => {
+          <GameLoop currentChapter={currentChapter} score={score} cash={cash} setScore={setScore} setCash={setCash} delight={delight} setDelight={setDelight} onRecipeSaved={(recipe) => setCustomRecipes(prev => [...prev, recipe])} isSandbox={!isStoryMode} isRestaurantMode={isRestaurantMode} dailySpecialId={restaurantShiftConfig?.dailySpecialId} contracts={restaurantShiftConfig?.contracts} chapterTodos={getChapterTodos(currentChapter, storyPath === 'pro_kitchen')} combo={combo} setCombo={setCombo} onShiftEnd={isRestaurantMode ? (stats) => {
             const state = loadRestaurantState() || { xp: 0, daysOperated: 0, contractProgress: {}, completedToday: [], lastPlayedDate: new Date().toDateString() };
             const contracts = restaurantShiftConfig?.contracts || [];
             let addedXP = Math.floor((stats.score || 0) / 10);

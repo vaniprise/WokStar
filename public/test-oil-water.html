@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LiquidFun Oil/Water Test</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 12px;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #111;
+      color: #eee;
+      display: flex;
+      flex-direction: row;
+      gap: 16px;
+      align-items: flex-start;
+    }
+    .canvas-wrap {
+      border: 2px solid #333;
+      border-radius: 8px;
+      background: #050505;
+      box-shadow: 0 0 0 1px #000, 0 16px 40px rgba(0,0,0,0.8);
+    }
+    #simCanvas {
+      display: block;
+      width: 640px;
+      height: 640px;
+      image-rendering: pixelated;
+      cursor: default;
+    }
+    .side {
+      min-width: 220px;
+      max-width: 260px;
+      background: #181818;
+      border-radius: 8px;
+      padding: 10px;
+      border: 1px solid #242424;
+    }
+    h1 {
+      font-size: 16px;
+      margin: 0 0 6px 0;
+    }
+    h2 {
+      font-size: 13px;
+      margin: 10px 0 4px 0;
+      color: #bbb;
+    }
+    p {
+      font-size: 11px;
+      color: #999;
+      margin: 0 0 6px 0;
+    }
+    .btn-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-bottom: 6px;
+    }
+    button {
+      padding: 4px 8px;
+      font-size: 11px;
+      border-radius: 4px;
+      border: 1px solid #444;
+      background: #2b2b2b;
+      color: #eee;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #3a3a3a;
+    }
+    #status {
+      font-size: 11px;
+      margin-top: 6px;
+      color: #ccc;
+      min-height: 1.2em;
+    }
+    .tagline {
+      font-size: 10px;
+      color: #777;
+    }
+  </style>
+</head>
+<body>
+  <div class="canvas-wrap">
+    <canvas id="simCanvas" width="640" height="640"></canvas>
+  </div>
+  <div class="side">
+    <h1>Oil / Water Sandbox</h1>
+    <p class="tagline">Standalone testbed for stratification, immiscibility, and heat later.</p>
+
+    <h2>Spawn</h2>
+    <div class="btn-row">
+      <button id="spawnWaterBtn" type="button">Spawn water (20°C)</button>
+      <button id="spawnOilBtn" type="button">Spawn oil (20°C)</button>
+    </div>
+
+    <h2>Controls</h2>
+    <div class="btn-row">
+      <button id="clearBtn" type="button">Clear all</button>
+    </div>
+
+    <h2>Simulation</h2>
+    <p>Gravity acts on both fluids. Oil gets a small continuous upward impulse to keep it buoyant. A short-range repulsion acts between oil and water pairs to keep them from mixing.</p>
+
+    <div id="status">Loading LiquidFun…</div>
+  </div>
+
+  <!-- Assumes Box2D.js (LiquidFun build) is available at project root, like the main test page. -->
+  <script type="module">
+    import Box2DFactory from '/Box2D.js';
+
+    const TYPE_WATER = 0;
+    const TYPE_OIL = 1;
+
+    const STATE_LIQUID = 0;
+    const STATE_GAS = 1;
+
+    // Specific heat capacities (kJ/kg·°C), relative units for our toy model.
+    const CP_WATER = 4.18;
+    const CP_OIL = 1.67;
+
+    // Upper bound for parallel JS arrays; set high enough to feel effectively
+    // unbounded in this demo while keeping memory reasonable.
+    const MAX_PARTICLES = 20000;
+
+    const canvas = document.getElementById('simCanvas');
+    const gl = canvas.getContext('webgl', { antialias: false, preserveDrawingBuffer: false });
+    const statusEl = document.getElementById('status');
+    const spawnWaterBtn = document.getElementById('spawnWaterBtn');
+    const spawnOilBtn = document.getElementById('spawnOilBtn');
+    const clearBtn = document.getElementById('clearBtn');
+
+    if (!canvas || !gl || !statusEl) {
+      throw new Error('Canvas, WebGL context, or status element missing');
+    }
+
+    function setStatus(msg) {
+      statusEl.textContent = msg;
+    }
+
+    // Parallel per-particle data, indexed by LiquidFun particle index.
+    const particleType = new Int8Array(MAX_PARTICLES);
+    const particleState = new Int8Array(MAX_PARTICLES);
+    const particleTemp = new Float32Array(MAX_PARTICLES);
+    const particleCp = new Float32Array(MAX_PARTICLES);
+
+    // Initialization helper for new particles.
+    function initParticleData(index, type, state, temp, cp) {
+      if (index < 0 || index >= MAX_PARTICLES) return;
+      particleType[index] = type;
+      particleState[index] = state;
+      particleTemp[index] = temp;
+      particleCp[index] = cp;
+    }
+
+    Box2DFactory().then(function (lf) {
+      const gravity = new lf.b2Vec2(0, 9.8);
+      const world = new lf.b2World(gravity);
+      lf.destroy(gravity);
+
+      // Container: simple static box slightly inset from canvas edges, using edge shapes
+      // (the JS build of LiquidFun used here doesn't expose b2Vec2Vector/b2ChainShape).
+      (function buildBounds() {
+        const bodyDef = new lf.b2BodyDef();
+        bodyDef.set_type(lf.b2_staticBody);
+        const ground = world.CreateBody(bodyDef);
+        lf.destroy(bodyDef);
+
+        const W = canvas.width / 100;
+        const H = canvas.height / 100;
+        const pad = 0.1;
+
+        function addEdge(ax, ay, bx, by) {
+          const edge = new lf.b2EdgeShape();
+          const v1 = new lf.b2Vec2(ax, ay);
+          const v2 = new lf.b2Vec2(bx, by);
+          edge.SetTwoSided(v1, v2);
+          ground.CreateFixture(edge, 0);
+          lf.destroy(v1);
+          lf.destroy(v2);
+          lf.destroy(edge);
+        }
+
+        addEdge(pad, pad, W - pad, pad);
+        addEdge(W - pad, pad, W - pad, H - pad);
+        addEdge(W - pad, H - pad, pad, H - pad);
+        addEdge(pad, H - pad, pad, pad);
+      })();
+
+      // Single shared particle system; custom data lives in parallel arrays above.
+      // Pre-rendered sprites for faster drawing.
+      // WebGL point-cloud rendering: program, buffers, and color data.
+      let glProgram = null;
+      let positionBuffer = null;
+      let colorBuffer = null;
+      let aPositionLoc = -1;
+      let aColorLoc = -1;
+      let uWorldSizeLoc = null;
+      let uPointSizeLoc = null;
+      let colorArray = new Float32Array(MAX_PARTICLES * 3);
+      let colorsDirty = false;
+
+      function createShader(type, source) {
+        const shader = gl.createShader(type);
+        gl.shaderSource(shader, source);
+        gl.compileShader(shader);
+        if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+          console.error('Shader compile error:', gl.getShaderInfoLog(shader));
+          gl.deleteShader(shader);
+          return null;
+        }
+        return shader;
+      }
+
+      function createProgram(vsSource, fsSource) {
+        const vs = createShader(gl.VERTEX_SHADER, vsSource);
+        const fs = createShader(gl.FRAGMENT_SHADER, fsSource);
+        if (!vs || !fs) return null;
+        const program = gl.createProgram();
+        gl.attachShader(program, vs);
+        gl.attachShader(program, fs);
+        gl.linkProgram(program);
+        if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+          console.error('Program link error:', gl.getProgramInfoLog(program));
+          gl.deleteProgram(program);
+          return null;
+        }
+        gl.deleteShader(vs);
+        gl.deleteShader(fs);
+        return program;
+      }
+
+      function initWebGLPipeline(worldWidth, worldHeight, pointSizePx) {
+        const vsSource = `
+          attribute vec2 a_position;
+          attribute vec3 a_color;
+          uniform vec2 u_worldSize;
+          uniform float u_pointSize;
+          varying vec3 v_color;
+          void main() {
+            // Map Box2D world (x:[0,W], y:[0,H] downward) to clip space.
+            float x = (a_position.x / u_worldSize.x) * 2.0 - 1.0;
+            float y = 1.0 - (a_position.y / u_worldSize.y) * 2.0;
+            gl_Position = vec4(x, y, 0.0, 1.0);
+            gl_PointSize = u_pointSize;
+            v_color = a_color;
+          }
+        `;
+        const fsSource = `
+          precision mediump float;
+          varying vec3 v_color;
+          void main() {
+            vec2 c = gl_PointCoord - vec2(0.5);
+            float dist = length(c);
+            if (dist > 0.5) discard;
+            gl_FragColor = vec4(v_color, 1.0);
+          }
+        `;
+
+        glProgram = createProgram(vsSource, fsSource);
+        if (!glProgram) return;
+
+        gl.useProgram(glProgram);
+        aPositionLoc = gl.getAttribLocation(glProgram, 'a_position');
+        aColorLoc = gl.getAttribLocation(glProgram, 'a_color');
+        uWorldSizeLoc = gl.getUniformLocation(glProgram, 'u_worldSize');
+        uPointSizeLoc = gl.getUniformLocation(glProgram, 'u_pointSize');
+
+        positionBuffer = gl.createBuffer();
+        colorBuffer = gl.createBuffer();
+
+        gl.uniform2f(uWorldSizeLoc, worldWidth, worldHeight);
+        gl.uniform1f(uPointSizeLoc, pointSizePx);
+
+        gl.enableVertexAttribArray(aPositionLoc);
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.vertexAttribPointer(aPositionLoc, 2, gl.FLOAT, false, 0, 0);
+
+        gl.enableVertexAttribArray(aColorLoc);
+        gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+        gl.vertexAttribPointer(aColorLoc, 3, gl.FLOAT, false, 0, 0);
+
+        gl.clearColor(0.02, 0.02, 0.02, 1.0);
+      }
+
+      function createParticleSystem() {
+        const psd = new lf.b2ParticleSystemDef();
+        // Smaller particles for high-resolution appearance.
+        psd.set_radius(0.035);
+        // Lower damping so fluids stay a bit more slippery and can level out.
+        psd.set_dampingStrength(0.24);
+        psd.set_density(1.0);
+        // No global viscosity for now; we want free-flowing liquids, not sand.
+        psd.set_viscousStrength(0.0);
+        // Mild surface tension to keep interfaces smooth without forming stiff clumps.
+        psd.set_surfaceTensionNormalStrength(0.18);
+        psd.set_surfaceTensionPressureStrength(0.18);
+        psd.set_maxCount(MAX_PARTICLES);
+        const sys = world.CreateParticleSystem(psd);
+        lf.destroy(psd);
+        return sys;
+      }
+
+      const SCALE = canvas.width / (canvas.width / 100); // ~100 pixels per meter
+
+      let particleSystem = createParticleSystem();
+      const particleRadius = particleSystem.GetRadius();
+      // Initialize WebGL pipeline now that we know the world size and point size.
+      const worldWidth = canvas.width / 100;
+      const worldHeight = canvas.height / 100;
+      const pointSizePx = Math.max(2.0, particleRadius * SCALE * 2.0);
+      initWebGLPipeline(worldWidth, worldHeight, pointSizePx);
+
+      // ---- Phase 2: Spawners for water and oil at rest (20°C) ----
+
+      function spawnBlob(cx, cy, r, count, type, baseFlags, tempC, cp) {
+        for (let i = 0; i < count; i++) {
+          const angle = Math.random() * Math.PI * 2;
+          const dist = r * (0.3 + 0.7 * Math.random());
+          const x = cx + Math.cos(angle) * dist;
+          const y = cy + Math.sin(angle) * dist;
+
+          const pd = new lf.b2ParticleDef();
+          pd.set_flags(baseFlags | lf.b2_colorMixingParticle);
+          const p = new lf.b2Vec2(x, y);
+          const v = new lf.b2Vec2(0, 0);
+          pd.set_position(p);
+          pd.set_velocity(v);
+
+          const idx = particleSystem.CreateParticle(pd);
+          if (idx >= 0 && idx < MAX_PARTICLES) {
+            initParticleData(idx, type, STATE_LIQUID, tempC, cp);
+            // Initialize color once for this particle; used by WebGL renderer.
+            const baseIndex = idx * 3;
+            if (type === TYPE_WATER) {
+              colorArray[baseIndex + 0] = 120 / 255;
+              colorArray[baseIndex + 1] = 190 / 255;
+              colorArray[baseIndex + 2] = 255 / 255;
+            } else if (type === TYPE_OIL) {
+              colorArray[baseIndex + 0] = 255 / 255;
+              colorArray[baseIndex + 1] = 235 / 255;
+              colorArray[baseIndex + 2] = 80 / 255;
+            } else {
+              colorArray[baseIndex + 0] = 0.8;
+              colorArray[baseIndex + 1] = 0.8;
+              colorArray[baseIndex + 2] = 0.8;
+            }
+            colorsDirty = true;
+          }
+
+          lf.destroy(p);
+          lf.destroy(v);
+          lf.destroy(pd);
+        }
+
+        const n = particleSystem.GetParticleCount();
+        setStatus('Particles: ' + n + ' (water+oil)');
+      }
+
+      function spawnWater() {
+        // Water: simple liquid blob near the bottom.
+        const W = canvas.width / SCALE;
+        const H = canvas.height / SCALE;
+        spawnBlob(
+          W * 0.5,
+          H * 0.55,
+          0.6,
+          180,
+          TYPE_WATER,
+          // Base water flag only; no tensile/viscous/spring so it flows freely.
+          lf.b2_waterParticle,
+          20.0,
+          CP_WATER
+        );
+      }
+
+      function spawnOil() {
+        // Oil: liquid blob above the water region.
+        const W = canvas.width / SCALE;
+        const H = canvas.height / SCALE;
+        spawnBlob(
+          W * 0.5,
+          H * 0.3,
+          0.6,
+          180,
+          TYPE_OIL,
+          // Oil also uses the base water flag; no extra viscosity yet.
+          lf.b2_waterParticle,
+          20.0,
+          CP_OIL
+        );
+      }
+
+      if (spawnWaterBtn) {
+        spawnWaterBtn.addEventListener('click', function () {
+          spawnWater();
+        });
+      }
+      if (spawnOilBtn) {
+        spawnOilBtn.addEventListener('click', function () {
+          spawnOil();
+        });
+      }
+      if (clearBtn) {
+        clearBtn.addEventListener('click', function () {
+          // Destroy and recreate the particle system to clear all particles safely.
+          if (particleSystem) {
+            world.DestroyParticleSystem(particleSystem);
+          }
+          particleSystem = createParticleSystem();
+
+          // Reset parallel data
+          for (let i = 0; i < MAX_PARTICLES; i++) {
+            particleType[i] = 0;
+            particleState[i] = 0;
+            particleTemp[i] = 0;
+            particleCp[i] = 0;
+            const baseIndex = i * 3;
+            colorArray[baseIndex + 0] = 0;
+            colorArray[baseIndex + 1] = 0;
+            colorArray[baseIndex + 2] = 0;
+          }
+          colorsDirty = true;
+          setStatus('Cleared all particles.');
+        });
+      }
+
+      // ---- Phase 2: Differential gravity (simulated density) ----
+      // No custom per-contact impulses. Water experiences full world gravity via
+      // LiquidFun; oil gets a reduced effective gravity by applying a continuous
+      // upward acceleration, making it behave as a lighter fluid.
+      function applyDifferentialGravity(dt) {
+        const count = particleSystem.GetParticleCount();
+        if (count === 0 || !lf.HEAPF32) return;
+
+        const velBuf = particleSystem.GetVelocityBuffer();
+        const velPtr = lf.getPointer(velBuf);
+        if (!velPtr) return;
+        const velBase = velPtr >> 2;
+
+        // World gravity is 9.8 m/s^2 downward; cancel ~70% of that for oil so
+        // it still falls in air but behaves much lighter than water overall.
+        const upwardAccel = 9.8 * 0.7;
+
+        for (let i = 0; i < count; i++) {
+          if (particleType[i] !== TYPE_OIL) continue;
+          if (particleState[i] !== STATE_LIQUID) continue;
+          const vyIndex = velBase + i * 2 + 1;
+          let vy = lf.HEAPF32[vyIndex];
+          if (vy !== vy) vy = 0;
+          // Upward is negative Y in Box2D coordinates.
+          vy += -upwardAccel * dt;
+          lf.HEAPF32[vyIndex] = vy;
+        }
+      }
+
+      // Very soft correction for rare oil particles that end up clearly below the
+      // settled water band near the bottom. This gently nudges only those stragglers
+      // upward without disturbing the otherwise flat layers.
+      function correctBottomTrappedOil(dt) {
+        const count = particleSystem.GetParticleCount();
+        if (count === 0 || !lf.HEAPF32) return;
+
+        const posBuf = particleSystem.GetPositionBuffer();
+        const velBuf = particleSystem.GetVelocityBuffer();
+        const posPtr = lf.getPointer(posBuf);
+        const velPtr = lf.getPointer(velBuf);
+        if (!posPtr || !velPtr) return;
+        const posBase = posPtr >> 2;
+        const velBase = velPtr >> 2;
+
+        // First pass: find the deepest part of the water band (largest y).
+        let waterMaxY = -Infinity;
+        for (let i = 0; i < count; i++) {
+          if (particleType[i] !== TYPE_WATER) continue;
+          if (particleState[i] !== STATE_LIQUID) continue;
+          const py = lf.HEAPF32[posBase + i * 2 + 1];
+          if (py !== py) continue;
+          if (py > waterMaxY) waterMaxY = py;
+        }
+        if (!isFinite(waterMaxY)) return; // no water present
+
+        const margin = particleRadius * 0.4;
+        const trapAccel = 5.0; // very gentle upward acceleration for trapped oil
+
+        // Second pass: nudge only oil that is clearly below the deepest water level.
+        for (let i = 0; i < count; i++) {
+          if (particleType[i] !== TYPE_OIL) continue;
+          if (particleState[i] !== STATE_LIQUID) continue;
+          const pyIndex = posBase + i * 2 + 1;
+          const vyIndex = velBase + i * 2 + 1;
+          const py = lf.HEAPF32[pyIndex];
+          if (py !== py) continue;
+
+          if (py > waterMaxY + margin) {
+            let vy = lf.HEAPF32[vyIndex];
+            if (vy !== vy) vy = 0;
+            // Upward is negative Y.
+            vy += -trapAccel * dt;
+            lf.HEAPF32[vyIndex] = vy;
+          }
+        }
+      }
+
+      // ---- Simulation loop & rendering ----
+
+      const timeStep = 1 / 60;
+      // Aggressively reduced iterations: plenty for fluids, much cheaper for CPU.
+      const velIters = 4;
+      const posIters = 2;
+      const particleIters = 1;
+
+      function step() {
+        world.Step(timeStep, velIters, posIters, particleIters);
+        applyDifferentialGravity(timeStep);
+        correctBottomTrappedOil(timeStep);
+      }
+
+      function render() {
+        gl.viewport(0, 0, canvas.width, canvas.height);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        const count = particleSystem.GetParticleCount();
+        if (count === 0 || !lf.HEAPF32) return;
+        const posBuf = particleSystem.GetPositionBuffer();
+        const posPtr = lf.getPointer(posBuf);
+        if (!posPtr) return;
+        const base = posPtr >> 2;
+        const count2 = count * 2;
+
+        gl.useProgram(glProgram);
+
+        // Upload positions directly from WASM memory in one shot.
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.bufferData(
+          gl.ARRAY_BUFFER,
+          lf.HEAPF32.subarray(base, base + count2),
+          gl.DYNAMIC_DRAW
+        );
+
+        // Upload colors only when they've changed (on spawn/clear).
+        if (colorsDirty) {
+          gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+          gl.bufferData(
+            gl.ARRAY_BUFFER,
+            colorArray.subarray(0, count * 3),
+            gl.DYNAMIC_DRAW
+          );
+          colorsDirty = false;
+        } else {
+          gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+        }
+
+        gl.enableVertexAttribArray(aPositionLoc);
+        gl.bindBuffer(gl.ARRAY_BUFFER, positionBuffer);
+        gl.vertexAttribPointer(aPositionLoc, 2, gl.FLOAT, false, 0, 0);
+
+        gl.enableVertexAttribArray(aColorLoc);
+        gl.bindBuffer(gl.ARRAY_BUFFER, colorBuffer);
+        gl.vertexAttribPointer(aColorLoc, 3, gl.FLOAT, false, 0, 0);
+
+        gl.drawArrays(gl.POINTS, 0, count);
+      }
+
+      function loop() {
+        step();
+        render();
+        requestAnimationFrame(loop);
+      }
+
+      setStatus('Ready — spawn water and oil.');
+      loop();
+    }).catch(function (err) {
+      console.error(err);
+      setStatus('Failed to load LiquidFun: ' + err);
+    });
+  </script>
+</body>
+</html>
+
