@@ -87,6 +87,7 @@ const WokPhysics = forwardRef(function WokPhysics(
     heatLevel = 0, isCleaning = false, waterLevel = 0, waterDirtiness = 0,
     oilLevel = 0, isOiling = false, toss = { x: 0, y: 0 },
     cookProgress = 0, burnProgress = 0, wokHei = 0, wokResidue = 0,
+    combo = 1,
     onSpill,
   },
   ref
@@ -97,6 +98,7 @@ const WokPhysics = forwardRef(function WokPhysics(
   useEffect(() => { onSpillRef.current = onSpill; }, [onSpill]);
   const spilledInstancesRef = useRef(new Set());
   const instanceCounterRef = useRef(0);
+  const prevTossRef = useRef({ x: 0, y: 0 });
   const stateRef = useRef({
     foodBodies: [],
     particles: [],
@@ -115,6 +117,7 @@ const WokPhysics = forwardRef(function WokPhysics(
     toss: { x: 0, y: 0 },
     wokHei: 0,
     wokResidue: 0,
+    combo: 1,
     cleanTossTriggered: false,
     trashTossTriggered: false,
     serveTossTriggered: false,
@@ -122,6 +125,7 @@ const WokPhysics = forwardRef(function WokPhysics(
   const animFrameRef = useRef(null);
 
   useEffect(() => { stateRef.current.heatLevel = heatLevel; }, [heatLevel]);
+  useEffect(() => { stateRef.current.combo = combo; }, [combo]);
   useEffect(() => {
     stateRef.current.isCleaning = isCleaning;
     stateRef.current.waterLevel = waterLevel;
@@ -205,6 +209,12 @@ const WokPhysics = forwardRef(function WokPhysics(
       const dt = Math.min(elapsed / targetInterval, 3);
 
       const s = stateRef.current;
+      const tossNow = s.toss || { x: 0, y: 0 };
+      const prevToss = prevTossRef.current;
+      const tossDx = tossNow.x - prevToss.x;
+      const tossDy = tossNow.y - prevToss.y;
+      const tossSpeed = Math.hypot(tossDx, tossDy);
+      prevTossRef.current = tossNow;
 
       ctx.clearRect(0, 0, CW, CH);
       ctx.save();
@@ -1051,6 +1061,88 @@ const WokPhysics = forwardRef(function WokPhysics(
         s.particles.push({ type: 'bubble', x: currentWokX + (Math.random() - 0.5) * 60, y: currentWokY + wokRadius - 20, vx: (Math.random() - 0.5) * 1, vy: -1 - Math.random() * 2, life: 0, maxLife: 20 + Math.random() * 15, size: 2 + Math.random() * 3 });
       }
 
+      // Combo-driven special sparks
+      const comboLevel = Math.max(1, Number(s.combo || 1));
+      if (comboLevel >= 5 && s.heatLevel > 40) {
+        const rimR = wokRadius + 6;
+        // 5x–9x: extra purple sparks around the rim
+        if (comboLevel < 10 && Math.random() < 0.35) {
+          const angle = Math.random() * Math.PI;
+          const hue = 270 + Math.random() * 40; // purple band
+          s.particles.push({
+            type: 'combo_spark',
+            x: currentWokX + Math.cos(angle) * rimR,
+            y: currentWokY + Math.sin(angle) * rimR,
+            vx: (Math.random() - 0.5) * 1.2,
+            vy: -3 - Math.random() * 3,
+            life: 0,
+            maxLife: 24 + Math.random() * 14,
+            size: 2.5 + Math.random() * 2.5,
+            hue,
+          });
+        }
+        // 10x+: rainbow burst on each strong toss
+        if (comboLevel >= 10 && tossSpeed > 0.06) {
+          const burst = 4 + Math.floor(tossSpeed * 30);
+          for (let i = 0; i < burst; i++) {
+            const angle = Math.random() * Math.PI;
+            const hue = Math.random() * 360;
+            s.particles.push({
+              type: 'combo_spark',
+              x: currentWokX + Math.cos(angle) * rimR,
+              y: currentWokY + Math.sin(angle) * rimR,
+              vx: (Math.random() - 0.5) * 2.5,
+              vy: -5 - Math.random() * 4,
+              life: 0,
+              maxLife: 18 + Math.random() * 12,
+              size: 3 + Math.random() * 3,
+              hue,
+            });
+          }
+        }
+        // 20x+: continuous rainbow sparks around rim + twinkles over wok
+        if (comboLevel >= 20) {
+          const t = Date.now() * 0.18;
+          const baseRainbowHue = (t % 360 + 360) % 360;
+          // Side rainbow sparks hugging the rim
+          const sideCount = 3;
+          for (let i = 0; i < sideCount; i++) {
+            const angle = (Math.random() * 0.6 + (Math.random() < 0.5 ? -1 : 1) * 0.7) * Math.PI; // bias to sides
+            const hue = (baseRainbowHue + (Math.random() - 0.5) * 50) % 360;
+            s.particles.push({
+              type: 'combo_spark',
+              x: currentWokX + Math.cos(angle) * rimR,
+              y: currentWokY + Math.sin(angle) * rimR,
+              vx: (Math.random() - 0.5) * 1.8,
+              vy: -4 - Math.random() * 3,
+              life: 0,
+              maxLife: 22 + Math.random() * 10,
+              size: 2.8 + Math.random() * 2.2,
+              hue,
+            });
+          }
+          // Twinkly sparks over the top of the wok
+          const topCount = 4;
+          const topY = currentWokY - wokRadius * 0.1;
+          for (let i = 0; i < topCount; i++) {
+            const hx = currentWokX + (Math.random() - 0.5) * wokRadius * 1.4;
+            const hy = topY - Math.random() * wokRadius * 0.5;
+            const hue = (baseRainbowHue + Math.random() * 360) % 360;
+            s.particles.push({
+              type: 'combo_spark',
+              x: hx,
+              y: hy,
+              vx: (Math.random() - 0.5) * 1.2,
+              vy: -1.2 - Math.random() * 1.2,
+              life: 0,
+              maxLife: 26 + Math.random() * 16,
+              size: 2.0 + Math.random() * 2.0,
+              hue,
+            });
+          }
+        }
+      }
+
       // Cap total particles when high load to maintain 60fps
       if (s.particles.length > PARTICLE_CAP_TOTAL) {
         s.particles = s.particles.slice(-PARTICLE_CAP_TOTAL);
@@ -1062,7 +1154,23 @@ const WokPhysics = forwardRef(function WokPhysics(
 
       // Volumetric fire renderer
       const jetFactor = s.heatLevel > 60 ? (s.heatLevel - 60) / 40 : 0;
-      const baseHue = Math.max(0, 60 - s.heatLevel * 0.6);
+      const lerpHue = (a, b, t) => {
+        const aa = ((a % 360) + 360) % 360;
+        const bb = ((b % 360) + 360) % 360;
+        const delta = ((bb - aa + 540) % 360) - 180; // shortest arc
+        return (aa + delta * t + 360) % 360;
+      };
+      const comboVal = Math.max(1, Number(s.combo || 1));
+      const heatBaseHue = Math.max(0, 60 - s.heatLevel * 0.6);
+      const orangeHue = heatBaseHue; // normal burner palette
+      const purpleHue = 285;
+      const greenHue = 120;
+      // TEMP: lowered thresholds for testing (was 5/10)
+      const tToPurple = Math.max(0, Math.min(1, (comboVal - 1) / 2)); // 1 -> 0, 3 -> 1
+      const tToGreen = Math.max(0, Math.min(1, (comboVal - 3) / 2));  // 3 -> 0, 5 -> 1
+      const comboHue = lerpHue(lerpHue(orangeHue, purpleHue, tToPurple), greenHue, tToGreen);
+      // Slow, continuous rainbow phase (start near green).
+      const rainbowPhase = Date.now() * 0.06 + 120;
       const coreLight = 75 + jetFactor * 20;
       const coreSat = Math.round(100 - jetFactor * 50);
 
@@ -1077,6 +1185,14 @@ const WokPhysics = forwardRef(function WokPhysics(
           const currentSize = p.size * (1 - lifeRatio * 0.25);
           if (currentSize < 0.5) continue;
 
+          let baseHue;
+          if (comboVal >= 10) {
+            // At 10x+ combo (was 20x), flames cycle smoothly through the rainbow.
+            const layerOffset = layerName === 'back' ? 0 : 40;
+            baseHue = (rainbowPhase + layerOffset) % 360;
+          } else {
+            baseHue = comboHue;
+          }
           const hue = Math.max(0, baseHue - lifeRatio * 25) | 0;
           const alpha = (1 - lifeRatio) * (0.6 + jetFactor * 0.35);
           const stretch = 1 + jetFactor * 2.0 * (1 - lifeRatio * 0.5);
@@ -1100,7 +1216,9 @@ const WokPhysics = forwardRef(function WokPhysics(
 
       // Wok Hei glow (purple aura)
       if (s.wokHei > 80) {
-        const pulse = Math.sin(Date.now() / 150) * 0.2 + 0.8;
+        // TEMP thresholds: 5+ (prev 10+), 3+ (prev 5+)
+        const comboBoost = comboLevel >= 5 ? 1.3 : comboLevel >= 3 ? 1.15 : 1.0;
+        const pulse = (Math.sin(Date.now() / 150) * 0.2 + 0.8) * comboBoost;
         const gradient = ctx.createRadialGradient(currentWokX, currentWokY, 0, currentWokX, currentWokY, wokRadius * 2.5);
         gradient.addColorStop(0, `rgba(217, 70, 239, ${0.4 * pulse})`);
         gradient.addColorStop(0.4, `rgba(168, 85, 247, ${0.15 * pulse})`);
@@ -1135,6 +1253,29 @@ const WokPhysics = forwardRef(function WokPhysics(
 
       // Back flames
       drawFlameLayer('back');
+
+      // Combo sparks renderer (purple at 5x, rainbow at 10x)
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (let i = s.particles.length - 1; i >= 0; i--) {
+        const p = s.particles[i];
+        if (p.type !== 'combo_spark') continue;
+        const lifeRatio = p.life / p.maxLife;
+        if (lifeRatio >= 1) continue;
+        const size = p.size * (1 - lifeRatio * 0.3);
+        if (size <= 0.2) continue;
+        const hue = (p.hue + lifeRatio * 40) % 360;
+        const alpha = (1 - lifeRatio) * 0.9;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, size, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${hue}, 100%, 60%, ${alpha})`;
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, size * 0.45, 0, Math.PI * 2);
+        ctx.fillStyle = `hsla(${hue}, 100%, 80%, ${alpha * 1.4})`;
+        ctx.fill();
+      }
+      ctx.restore();
 
       // Wok outer hull with glowing metal
       if (s.isCleaning) {

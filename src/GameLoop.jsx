@@ -51,7 +51,29 @@ const DishIcon = ({ type, icons }) => (
   </div>
 );
 
-export default function GameLoop({ currentChapter = 0, score: initialScore = 0, cash: initialCash = 0, setScore: parentSetScore, setCash: parentSetCash, delight: parentDelight, setDelight: parentSetDelight, onRecipeSaved, isSandbox = false, isRestaurantMode = false, dailySpecialId = null, contracts = [], chapterTodos = [], combo: comboProp, setCombo: setComboProp, onShiftEnd }) {
+export default function GameLoop({
+  currentChapter = 0,
+  score: initialScore = 0,
+  cash: initialCash = 0,
+  setScore: parentSetScore,
+  setCash: parentSetCash,
+  delight: parentDelight,
+  setDelight: parentSetDelight,
+  soul: soulProp,
+  setSoul: setSoulProp,
+  onRecipeSaved,
+  isSandbox = false,
+  isRestaurantMode = false,
+  dailySpecialId = null,
+  contracts = [],
+  chapterTodos = [],
+  combo: comboProp,
+  setCombo: setComboProp,
+  onShiftEnd,
+  tutorialActive = false,
+  onTutorialSignals,
+  onTutorialEvent,
+}) {
   const chapter = isSandbox || isRestaurantMode ? null : STORY_CHAPTERS[Math.min(currentChapter, STORY_CHAPTERS.length - 1)];
   const wokPhysicsRef = useRef(null);
   const prevTossRef = useRef({ x: 0, y: 0 });
@@ -83,7 +105,9 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
   const setScore = isControlled ? parentSetScore : setLocalScore;
   const cash = isControlled ? initialCash : localCash;
   const setCash = isControlled ? parentSetCash : setLocalCash;
-  const [soul, setSoul] = useState(0);
+  const [localSoul, setLocalSoul] = useState(0);
+  const soul = soulProp !== undefined ? soulProp : localSoul;
+  const setSoul = setSoulProp || setLocalSoul;
   const [orders, setOrders] = useState([]);
   // Combo can be controlled by parent (App) or managed locally if no props passed.
   const [localCombo, setLocalCombo] = useState(1);
@@ -144,50 +168,40 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
   }, [heatLevel, wokContents, cookProgress, burnProgress, wokHei,
       wokResidue, isCleaning, oilLevel, isOiling, toss, waterLevel, waterDirtiness]);
 
-  // Keyboard:
-  // W = heat up, S = heat down
-  // D = add oil (hold), A = reduce oil
-  // Q = Gift, E = Serve, C = Clean (hold)
   useEffect(() => {
-    const target = (e) => /input|textarea|select/i.test(e.target?.tagName || '');
-    const onKeyDown = (e) => {
-      if (target(e)) return;
-      const k = e.key?.toLowerCase();
-      if (k === 'w') {
-        e.preventDefault();
-        setHeatLevel(prev => Math.min(100, prev + 8));
-      } else if (k === 's') {
-        e.preventDefault();
-        setHeatLevel(prev => Math.max(0, prev - 8));
-      } else if (k === 'd') {
-        e.preventDefault();
-        setIsOiling(true);
-      } else if (k === 'a') {
-        e.preventDefault();
-        setOilLevel(prev => Math.max(0, prev - 8));
-      } else if (k === 'q') {
-        e.preventDefault();
-        serveDish(true);
-      } else if (k === 'e') {
-        e.preventDefault();
-        serveDish(false);
-      } else if (k === 'c') {
-        e.preventDefault();
-        handleCleanDown();
-      }
-    };
-    const onKeyUp = (e) => {
-      const k = e.key?.toLowerCase();
-      if (k === 'd') setIsOiling(false);
-      if (k === 'c') handleCleanRelease();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-    };
-  }, []);
+    if (!tutorialActive) return;
+    const isTossingNow = !!gameDataRef.current.isTossing || (Math.abs(toss.x) + Math.abs(toss.y) > 0.001);
+    onTutorialSignals?.({
+      heatLevel,
+      oilLevel,
+      wokHei,
+      cookProgress,
+      burnProgress,
+      wokResidue,
+      waterLevel,
+      waterDirtiness,
+      wokContentsCount: wokContents.length,
+      isTossing: isTossingNow,
+      hasActiveOrder: orders.some(o => !o.failed),
+    });
+  }, [
+    tutorialActive,
+    onTutorialSignals,
+    heatLevel,
+    oilLevel,
+    wokHei,
+    cookProgress,
+    burnProgress,
+    wokResidue,
+    waterLevel,
+    waterDirtiness,
+    wokContents.length,
+    toss,
+    orders,
+  ]);
+
+  // Keyboard handlers are registered later (after action functions are defined)
+  // to avoid stale closures and TDZ issues.
 
   useEffect(() => { ordersRef.current = orders; }, [orders]);
 
@@ -535,14 +549,21 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
         setDelight(d => { const next = Math.max(-10, d - 2); if (next <= -10) setGameOver(true); return next; });
       }
 
-      if (newCombo >= 3 && combo < 3) triggerStreakPopup("HEATING UP!", "#f97316");
-      else if (newCombo >= 5 && combo < 5) triggerStreakPopup("WOK & ROLL!", "#eab308");
-      else if (newCombo >= 10 && combo < 10) triggerStreakPopup("SHAOLIN SPEED!", "#a855f7");
-      else if (newCombo >= 15 && combo < 15) triggerStreakPopup("SORROWFUL TEARS!", "#3b82f6");
-      else if (newCombo >= 20 && newCombo % 5 === 0) triggerStreakPopup("SIK SAN!", "#ec4899");
+      // TEMP: lowered combo thresholds for testing (was 3/5/10/15/20)
+      if (newCombo >= 2 && combo < 2) triggerStreakPopup("HEATING UP!", "#f97316");
+      else if (newCombo >= 3 && combo < 3) triggerStreakPopup("WOK & ROLL!", "#eab308");
+      else if (newCombo >= 5 && combo < 5) triggerStreakPopup("SHAOLIN SPEED!", "#a855f7");
+      else if (newCombo >= 8 && combo < 8) triggerStreakPopup("SORROWFUL TEARS!", "#3b82f6");
+      else if (newCombo >= 10 && newCombo % 3 === 1) triggerStreakPopup("SIK SAN!", "#ec4899");
       showNotification(`${quality} +$${profit.toFixed(2)}${dailySpecialMult > 1 ? ' 🌟 Daily Special!' : ''}${oilTip > 0 ? ` (+$${(oilTip * batchSize).toFixed(0)} oil tip)` : ''}${surplusGoodwill > 0 ? ` · +$${surplusGoodwill.toFixed(2)} goodwill` : ''}${!isSandbox && !isRestaurantMode ? ' +2 delight' : ''}`, profit >= 0 ? 'success' : 'error');
       }
       playDing(isPerfect);
+      onTutorialEvent?.({
+        type: 'serve_success',
+        donation: !!isDonation,
+        perfect: !!isPerfect,
+        batchSize,
+      });
       setOrders(prev => prev.filter((_, idx) => idx !== matchedOrderIndex));
       wokPhysicsRef.current?.triggerServeToss?.();
       setWokContents([]);
@@ -563,6 +584,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
         if (!isSandbox) setCash(c => c - totalCost);
         showNotification(isSandbox ? 'Donated — no penalty in sandbox!' : `Imperfect Donation -$${totalCost.toFixed(2)}`, isSandbox ? 'success' : 'error');
         setCombo(1);
+          onTutorialEvent?.({ type: 'serve_attempt', donation: true, ok: false, reason: 'imperfect' });
         wokPhysicsRef.current?.triggerServeToss?.();
         setWokContents([]);
         setWokResidue(prev => Math.min(100, prev + 15));
@@ -595,6 +617,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
 
         if (!isSandbox) setDelight(d => { const next = Math.max(-10, d - 2); if (next <= -10) setGameOver(true); return next; });
         setCombo(1);
+        onTutorialEvent?.({ type: 'serve_attempt', donation: !!isDonation, ok: false, reason: 'failed' });
         wokPhysicsRef.current?.triggerTrashToss?.();
         setWokContents([]);
         setWokResidue(prev => Math.min(100, prev + 15));
@@ -656,6 +679,51 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
       setWaterDirtiness(0);
     }
   };
+
+  // Keyboard:
+  // W = heat up, S = heat down
+  // D = add oil (hold), A = reduce oil
+  // Q = Gift, E = Serve, C = Clean (hold)
+  useEffect(() => {
+    const target = (e) => /input|textarea|select/i.test(e.target?.tagName || '');
+    const onKeyDown = (e) => {
+      if (target(e)) return;
+      const k = e.key?.toLowerCase();
+      if (k === 'w') {
+        e.preventDefault();
+        setHeatLevel(prev => Math.min(100, prev + 8));
+      } else if (k === 's') {
+        e.preventDefault();
+        setHeatLevel(prev => Math.max(0, prev - 8));
+      } else if (k === 'd') {
+        e.preventDefault();
+        setIsOiling(true);
+      } else if (k === 'a') {
+        e.preventDefault();
+        setOilLevel(prev => Math.max(0, prev - 8));
+      } else if (k === 'q') {
+        e.preventDefault();
+        serveDish(true);
+      } else if (k === 'e') {
+        e.preventDefault();
+        serveDish(false);
+      } else if (k === 'c') {
+        e.preventDefault();
+        handleCleanDown();
+      }
+    };
+    const onKeyUp = (e) => {
+      const k = e.key?.toLowerCase();
+      if (k === 'd') setIsOiling(false);
+      if (k === 'c') handleCleanRelease();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, [handleCleanDown, serveDish]);
 
   useEffect(() => {
     if (!audioReady) return;
@@ -770,6 +838,11 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
         let newBurn = state.burnProgress;
         let newWokHei = state.wokHei;
         const heatFactor = state.heatLevel / 100;
+        const highHeatCookBoost =
+          state.heatLevel >= 90 ? 2.0 :
+          state.heatLevel >= 80 ? 1.6 :
+          state.heatLevel >= 70 ? 1.25 :
+          1.0;
 
         const isFoodMoving = state.isTossing;
         // Burn multiplier: tossing = minimal burn; no toss = ramps up the longer since last toss (tossing regularly keeps it low)
@@ -789,6 +862,11 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
         const isDry = state.oilLevel < 20;
         const isGreasy = state.oilLevel > 75;
         const oilCookMod = isGreasy ? 0.4 : 1.0;
+        const oil01 = Math.max(0, Math.min(1, state.oilLevel / 100));
+        // More oil = "heavier" wok hei response (slower up/down). Gain slows more than decay,
+        // so you need sustained tossing to hold a high meter when very oily.
+        const wokHeiGainOilMult = 1 - 0.65 * oil01;   // 1.00 -> 0.35
+        const wokHeiDecayOilMult = 1 - 0.35 * oil01;  // 1.00 -> 0.65
         // More oil at high heat = more burn; scale with oil level; extra when very hot + greasy
         const oilBurnMod = isDry ? 3.0 : (1 + (state.oilLevel / 100) * 0.9 + (isGreasy && state.heatLevel > 80 ? 0.8 : 0));
         const oilResidueMod = isDry ? 3.0 : 0.5;
@@ -797,7 +875,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
         const baseCookSpeed = Math.max(0.5, (6 - complexity) * 0.3);
 
         if (state.heatLevel > 20) {
-          newCook += (heatFactor * 0.8) * baseCookSpeed * cookMultiplier * oilCookMod;
+          newCook += (heatFactor * 0.8) * baseCookSpeed * cookMultiplier * oilCookMod * highHeatCookBoost;
         }
 
         const residueBurnMultiplier = 1 + (state.wokResidue / 30);
@@ -805,16 +883,21 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
         if (state.heatLevel > 70) {
           if (state.isTossing && state.oilLevel > 2) {
             const wokHeiGain = Math.max(3.0, 8.0 - (state.wokResidue / 20));
-            newWokHei = Math.min(100, newWokHei + wokHeiGain);
+            newWokHei = Math.min(100, newWokHei + wokHeiGain * wokHeiGainOilMult);
             setOilLevel(prev => Math.max(0, prev - 0.6));
           }
           // Base burn rate; higher when very hot + greasy. Scale up with cook time at high heat.
           const burnBaseCoeff = (isGreasy && state.heatLevel > 80) ? 0.0042 : 0.002;
           const cookDurationFactor = 1 + (state.cookProgress / 100) * 0.65;
           newBurn += ((state.heatLevel - 65) * burnBaseCoeff) * residueBurnMultiplier * burnMultiplier * diffMults.burn * oilBurnMod * cookDurationFactor;
-          if (!state.isTossing) newWokHei = Math.max(0, newWokHei - 0.2);
+          if (!state.isTossing) {
+            const lastToss = state.lastTossTime || 0;
+            const timeSinceTossSec = lastToss ? (Date.now() - lastToss) / 1000 : 999;
+            const idleDecay = (0.35 + Math.min(1.5, timeSinceTossSec) * 0.15) * wokHeiDecayOilMult;
+            newWokHei = Math.max(0, newWokHei - idleDecay);
+          }
         } else {
-          newWokHei = Math.max(0, newWokHei - 0.3);
+          newWokHei = Math.max(0, newWokHei - (0.45 * wokHeiDecayOilMult));
         }
 
         setWokResidue(prev => Math.min(100, prev + ((0.15 + (heatFactor * 0.3)) * oilResidueMod)));
@@ -1315,7 +1398,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
         <div className="flex flex-row justify-center gap-1.5 h-full z-20 shrink-0 w-28 max-h-[90%]">
 
           {/* Heat Slider */}
-          <div className="w-1/2 bg-neutral-900 rounded-full flex flex-col items-center border border-neutral-800 relative flex-1 min-h-0 py-4" title="Drag to set burner heat. High heat cooks faster but fills the Burn meter quicker.">
+          <div data-tutorial-id="heat" className="w-1/2 bg-neutral-900 rounded-full flex flex-col items-center border border-neutral-800 relative flex-1 min-h-0 py-4" title="Drag to set burner heat. High heat cooks faster but fills the Burn meter quicker.">
             <div className={`font-black text-[8px] mb-2 z-10 pointer-events-none transition-colors ${heatLevel > 80 ? 'text-red-500 animate-pulse' : 'text-neutral-500'}`}>HEAT</div>
             <div
               className="relative flex-1 w-full flex justify-center cursor-ns-resize touch-none"
@@ -1342,7 +1425,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
           </div>
 
           {/* Oil Squeeze Bottle */}
-          <div className="w-1/2 bg-neutral-900/60 rounded-full flex flex-col items-center border border-yellow-900/50 relative flex-1 min-h-0 py-4 shadow-[inset_0_0_20px_rgba(234,179,8,0.05)]" title="Oil level. Hold the bottle button below to add oil.">
+          <div data-tutorial-id="oil" className="w-1/2 bg-neutral-900/60 rounded-full flex flex-col items-center border border-yellow-900/50 relative flex-1 min-h-0 py-4 shadow-[inset_0_0_20px_rgba(234,179,8,0.05)]" title="Oil level. Hold the bottle button below to add oil.">
             <div className={`font-black text-[8px] mb-2 z-10 pointer-events-none transition-colors ${oilLevel < 20 ? 'text-red-500 animate-pulse' : oilLevel > 75 ? 'text-orange-400' : 'text-yellow-500'}`}>OIL</div>
             <div className="relative flex-1 w-full flex justify-center">
               <div className="w-2 h-full bg-black rounded-full overflow-hidden relative shadow-inner">
@@ -1365,6 +1448,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
               )}
             </div>
             <button
+              data-tutorial-id="oil-button"
               onPointerDown={() => setIsOiling(true)}
               onPointerUp={() => setIsOiling(false)}
               onPointerLeave={() => setIsOiling(false)}
@@ -1378,7 +1462,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
 
         {!viewport.isIpadPortrait && (
         /* Ingredients left: 3 cols — Proteins | Carbs | Vegetables */
-        <div className="flex flex-col shrink-0 w-[19.6rem] h-full min-h-0 bg-[#151517] border border-[#0a0a0c] rounded-xl overflow-hidden shadow-[inset_0_0_20px_rgba(0,0,0,0.5)] z-20">
+        <div data-tutorial-id="ingredients" className="flex flex-col shrink-0 w-[19.6rem] h-full min-h-0 bg-[#151517] border border-[#0a0a0c] rounded-xl overflow-hidden shadow-[inset_0_0_20px_rgba(0,0,0,0.5)] z-20">
           <div className="text-[10px] font-black text-neutral-400 uppercase tracking-widest text-center py-2 border-b border-neutral-800 shrink-0" title="Click an ingredient to add it to the wok. Cost and stats on hover.">Add</div>
           <div className={`flex-1 min-h-0 flex gap-1 p-1.5 overflow-hidden ${viewport.isIpadPortrait ? 'flex-col overflow-y-auto' : 'flex-row'}`}>
             {viewport.isIpadPortrait ? (
@@ -1443,6 +1527,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
           <div className="flex-1 min-w-0 h-full flex flex-col items-center justify-center relative overflow-hidden">
           {/* Cook / Burn progress overlay */}
           <div
+            data-tutorial-id="cook-burn"
             className="absolute top-0 w-full flex justify-between px-1 z-20 pointer-events-none transition-opacity duration-300"
             style={{ opacity: wokContents.length > 0 ? 1 : 0 }}
             title="Cook and Burn meters. Serve when Cook is high and Burn is low. Toss to slow Burn."
@@ -1488,6 +1573,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
             burnProgress={burnProgress}
             wokHei={wokHei}
             wokResidue={wokResidue}
+            combo={combo}
             onSpill={handleSpill}
           />
           </div>
@@ -1503,7 +1589,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
               <div className="flex flex-col shrink-0 gap-2 w-[12.94rem]">
                 {/* Story objectives stacked directly above the current order panel */}
                 {!isSandbox && !isRestaurantMode && chapterTodos && chapterTodos.length > 0 && (
-                  <div className="bg-black/80 rounded-xl border border-neutral-700 p-3">
+                  <div data-tutorial-id="objectives" className="bg-black/80 rounded-xl border border-neutral-700 p-3">
                     <div className="text-[10px] font-black text-neutral-400 uppercase tracking-wider mb-2">Objectives</div>
                     <div className="flex flex-col gap-1 text-[10px]">
                       {(() => {
@@ -1523,7 +1609,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
                   </div>
                 )}
 
-                <div className="shrink-0 bg-black/70 rounded-xl border border-neutral-700 p-4 max-h-[85%] overflow-y-auto custom-scrollbar z-10 w-full" title="Ingredients needed for current order. ✓ enough added, ✗ over-added.">
+                <div data-tutorial-id="order" className="shrink-0 bg-black/70 rounded-xl border border-neutral-700 p-4 max-h-[85%] overflow-y-auto custom-scrollbar z-10 w-full" title="Ingredients needed for current order. ✓ enough added, ✗ over-added.">
                   <div className="text-xs font-black text-neutral-400 uppercase tracking-wider mb-2">Current order</div>
                   <div className="text-sm text-amber-400 font-bold mb-3 truncate max-w-[270px]" title={order.name}>{order.name}</div>
                   <div className="text-xs text-neutral-300 font-bold mb-4">Remaining: <span className={totalRemaining === 0 ? 'text-green-400' : 'text-amber-400'}>{totalRemaining}</span></div>
@@ -1674,7 +1760,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
         )}
 
         {/* Wok Hei meter */}
-        <div className="flex flex-col items-center justify-center shrink-0 z-20 py-2 h-full" title="Wok Hei. Build by tossing at high heat with oil. Boosts revenue.">
+        <div data-tutorial-id="wok-hei" className="flex flex-col items-center justify-center shrink-0 z-20 py-2 h-full" title="Wok Hei. Build by tossing at high heat with oil. Boosts revenue.">
           <div
             className={`text-[8px] font-black mb-1 text-fuchsia-500 tracking-widest ${wokHei > 80 ? 'animate-pulse drop-shadow-[0_0_5px_rgba(217,70,239,0.8)]' : 'opacity-50'}`}
             style={{ writingMode: 'vertical-rl', transform: 'rotate(180deg)' }}
@@ -1692,7 +1778,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
         <div className="flex flex-col justify-center z-20 shrink-0 h-full gap-1.5 w-24 max-h-[90%]">
 
           {/* 2D Elliptical Toss Pad */}
-          <div className="flex flex-col flex-1 bg-neutral-900/80 rounded-[40px] border border-blue-900/50 relative shadow-[inset_0_0_20px_rgba(59,130,246,0.05)] min-h-0 py-4 px-1.5" title="Drag to toss the wok. Tossing slows Burn and builds Wok Hei at high heat.">
+          <div data-tutorial-id="toss" className="flex flex-col flex-1 bg-neutral-900/80 rounded-[40px] border border-blue-900/50 relative shadow-[inset_0_0_20px_rgba(59,130,246,0.05)] min-h-0 py-4 px-1.5" title="Drag to toss the wok. Tossing slows Burn and builds Wok Hei at high heat.">
             <div className={`font-black text-[8px] mb-1 z-10 pointer-events-none text-center transition-colors ${toss.x !== 0 || toss.y !== 0 ? 'text-blue-400 drop-shadow-[0_0_5px_rgba(96,165,250,0.8)]' : 'text-neutral-500'}`}>TOSS</div>
             <div
               className="relative flex-1 w-full flex justify-center items-center cursor-move touch-none"
@@ -1721,6 +1807,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
           {/* Tactile Action Grid */}
           <div className="grid grid-cols-2 w-full shrink-0 min-w-0 gap-1.5 h-14">
             <button
+              data-tutorial-id="trash"
               onClick={handleTrash}
               disabled={gameOver}
               className="w-full min-w-0 h-full bg-neutral-800 hover:bg-neutral-700 border-black border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-red-500 flex flex-col items-center justify-center transition-all text-[9px] shadow-lg tracking-wider overflow-hidden disabled:opacity-30"
@@ -1729,6 +1816,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
               <Trash2 className="w-4 h-4 mb-0.5 shrink-0" /> TRASH
             </button>
             <button
+              data-tutorial-id="clean"
               onPointerDown={handleCleanDown}
               onPointerUp={handleCleanRelease}
               onPointerLeave={handleCleanRelease}
@@ -1750,6 +1838,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
           )}
           <div className="grid grid-cols-2 w-full shrink-0 min-w-0 gap-1.5 h-14">
             <button
+              data-tutorial-id="gift"
               onClick={() => serveDish(true)}
               disabled={gameOver}
               className="w-full min-w-0 h-full bg-cyan-800 hover:bg-cyan-700 border-cyan-950 border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-cyan-100 flex flex-col items-center justify-center transition-all shadow-xl text-[9px] tracking-wider overflow-hidden disabled:opacity-30"
@@ -1758,6 +1847,7 @@ export default function GameLoop({ currentChapter = 0, score: initialScore = 0, 
               <Heart className="w-4 h-4 mb-0.5 shrink-0" /> GIFT
             </button>
             <button
+              data-tutorial-id="serve"
               onClick={() => serveDish(false)}
               disabled={gameOver}
               className="w-full min-w-0 h-full bg-green-600 hover:bg-green-500 border-green-900 border-b-4 active:border-b-0 active:translate-y-1 rounded-xl font-bold text-white flex flex-col items-center justify-center transition-all shadow-xl text-[9px] tracking-wider overflow-hidden disabled:opacity-30"

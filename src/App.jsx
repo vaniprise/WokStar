@@ -7,6 +7,7 @@ import GameLoop from './GameLoop';
 import LiquidFunTest from './LiquidFunTest';
 import RestaurantHub, { loadRestaurantState, saveRestaurantState } from './RestaurantHub';
 import { initAudio as initAudioEngine } from './audioEngine';
+import TutorialOverlay from './TutorialOverlay';
 
 // ==========================================
 // DIFFICULTY SCALING
@@ -946,8 +947,26 @@ export default function App() {
   
   const [combo, setCombo] = useState(1);
   const [delight, setDelight] = useState(0);
+
+  const [tutorialActive, setTutorialActive] = useState(false);
+  const [tutorialStepIndex, setTutorialStepIndex] = useState(0);
+  const [tutorialSignals, setTutorialSignals] = useState(() => ({
+    heatLevel: 40,
+    oilLevel: 20,
+    wokHei: 0,
+    cookProgress: 0,
+    burnProgress: 0,
+    wokResidue: 0,
+    waterLevel: 0,
+    waterDirtiness: 0,
+    wokContentsCount: 0,
+    isTossing: false,
+    hasActiveOrder: false,
+  }));
+  const tutorialMetaRef = useRef({ tossedOnce: false, servedOnce: false });
   
-  const flameTheme = combo >= 10 ? 'dark' : combo >= 5 ? 'angelic' : 'standard';
+  // TEMP: lowered thresholds for testing (was 5/10)
+  const flameTheme = combo >= 5 ? 'dark' : combo >= 3 ? 'angelic' : 'standard';
   
   const [orders, setOrders] = useState([]);
   const [heatLevel, setHeatLevel] = useState(0);
@@ -1053,34 +1072,7 @@ export default function App() {
     scoreRef.current = score;
   }, [score]);
 
-  // Keyboard: Q = heat up, A = heat down, C = oil (hold)
-  useEffect(() => {
-    if (gameState !== 'PLAYING') return;
-    const target = (e) => /input|textarea|select/i.test(e.target?.tagName || '');
-    const onKeyDown = (e) => {
-      if (target(e)) return;
-      const k = e.key?.toLowerCase();
-      if (k === 'q') {
-        e.preventDefault();
-        setHeatLevel(prev => Math.min(100, prev + 8));
-      } else if (k === 'a') {
-        e.preventDefault();
-        setHeatLevel(prev => Math.max(0, prev - 8));
-      } else if (k === 'c') {
-        e.preventDefault();
-        setIsOiling(true);
-      }
-    };
-    const onKeyUp = (e) => {
-      if (e.key?.toLowerCase() === 'c') setIsOiling(false);
-    };
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    return () => {
-      window.removeEventListener('keydown', onKeyDown);
-      window.removeEventListener('keyup', onKeyUp);
-    };
-  }, [gameState]);
+  // Keyboard controls are handled inside `GameLoop` while playing.
 
   useEffect(() => {
     if (!auth) return;
@@ -1290,11 +1282,21 @@ export default function App() {
           else burnMultiplier = 0.85;
         }
         const cookMultiplier = isFoodMoving ? 1.5 : 0.5;
+        const highHeatCookBoost =
+          state.heatLevel >= 90 ? 2.0 :
+          state.heatLevel >= 80 ? 1.6 :
+          state.heatLevel >= 70 ? 1.25 :
+          1.0;
 
         // OIL MODIFIERS
         const isDry = state.oilLevel < 20;
         const isGreasy = state.oilLevel > 75;
         const oilCookMod = isGreasy ? 0.4 : 1.0; 
+        const oil01 = Math.max(0, Math.min(1, state.oilLevel / 100));
+        // More oil = "heavier" wok hei response (slower up/down). Gain slows more than decay,
+        // so you need sustained tossing to hold a high meter when very oily.
+        const wokHeiGainOilMult = 1 - 0.65 * oil01;   // 1.00 -> 0.35
+        const wokHeiDecayOilMult = 1 - 0.35 * oil01;  // 1.00 -> 0.65
         // More oil at high heat = more burn (oil scorches). Scale with oil level; extra when very hot + greasy.
         const oilBurnMod = isDry ? 3.0 : (1 + (state.oilLevel / 100) * 0.9 + (isGreasy && state.heatLevel > 80 ? 0.8 : 0)); 
         const oilResidueMod = isDry ? 3.0 : 0.5; 
@@ -1303,7 +1305,7 @@ export default function App() {
         const baseCookSpeed = Math.max(0.5, (6 - complexity) * 0.3);
 
         if (state.heatLevel > 20) {
-            newCook += (heatFactor * 0.8) * baseCookSpeed * cookSpeedMod * cookMultiplier * prepBuff.cook * oilCookMod; 
+            newCook += (heatFactor * 0.8) * baseCookSpeed * cookSpeedMod * cookMultiplier * prepBuff.cook * oilCookMod * highHeatCookBoost; 
         }
 
         const residueBurnMultiplier = 1 + (state.wokResidue / 30); 
@@ -1315,7 +1317,7 @@ export default function App() {
                 // Make Wok Hei build more slowly: smaller base gain and stronger
                 // penalty from residue so it takes more sustained tossing to max.
                 const wokHeiGain = Math.max(1.0, 4.0 - (state.wokResidue / 25)) * whMult;
-                newWokHei = Math.min(100, newWokHei + wokHeiGain);
+                newWokHei = Math.min(100, newWokHei + (wokHeiGain * wokHeiGainOilMult));
                 // Slightly lower oil drain per Wok Hei tick to match slower gain.
                 setOilLevel(prev => Math.max(0, prev - 0.9)); 
             }
@@ -1324,9 +1326,14 @@ export default function App() {
           const burnBaseCoeff = (isGreasy && state.heatLevel > 80) ? 0.0042 : 0.002;
           const cookDurationFactor = 1 + (state.cookProgress / 100) * 0.65; // longer at high heat = more burn
           newBurn += ((state.heatLevel - 65) * burnBaseCoeff) * residueBurnMultiplier * burnMultiplier * burnResist * prepBuff.burn * diffMults.burn * oilBurnMod * cookDurationFactor;
-          if (!state.isTossing) newWokHei = Math.max(0, newWokHei - 0.2); 
+          if (!state.isTossing) {
+            const lastToss = state.lastTossTime || 0;
+            const timeSinceTossSec = lastToss ? (Date.now() - lastToss) / 1000 : 999;
+            const idleDecay = (0.35 + Math.min(1.5, timeSinceTossSec) * 0.15) * wokHeiDecayOilMult;
+            newWokHei = Math.max(0, newWokHei - idleDecay);
+          }
         } else {
-           newWokHei = Math.max(0, newWokHei - 0.3); 
+           newWokHei = Math.max(0, newWokHei - (0.45 * wokHeiDecayOilMult)); 
         }
 
         setWokResidue(prev => Math.min(100, prev + ((0.15 + (heatFactor * 0.3)) * oilResidueMod)));
@@ -2388,8 +2395,9 @@ export default function App() {
   
   const getDynamicPrompt = () => {
      if (wokContents.length === 0) {
-         if (combo >= 10) return { text: `Combo x${combo}! DARK ARTS UNLEASHED!`, color: "text-lime-400 drop-shadow-[0_0_5px_rgba(163,230,53,0.8)]" };
-         if (combo >= 5) return { text: `Combo x${combo}! ANGELIC FLAMES IGNITED!`, color: "text-purple-400 drop-shadow-[0_0_5px_rgba(192,132,252,0.8)]" };
+         // TEMP: lowered thresholds for testing (was 5/10)
+         if (combo >= 5) return { text: `Combo x${combo}! DARK ARTS UNLEASHED!`, color: "text-lime-400 drop-shadow-[0_0_5px_rgba(163,230,53,0.8)]" };
+         if (combo >= 3) return { text: `Combo x${combo}! ANGELIC FLAMES IGNITED!`, color: "text-purple-400 drop-shadow-[0_0_5px_rgba(192,132,252,0.8)]" };
          if (combo > 1) return { text: `Combo x${combo}! Toss high to maintain streak!`, color: "text-orange-400" };
          return { text: "Serve perfect dishes to start a streak.", color: "text-neutral-500" };
      }
@@ -2474,6 +2482,9 @@ export default function App() {
     setOrders([]);
     setActivePrepBuff(null);
     setNpcEncounter(null);
+    setTutorialActive(false);
+    setTutorialStepIndex(0);
+    tutorialMetaRef.current = { tossedOnce: false, servedOnce: false };
     setGameState('MENU');
   };
 
@@ -2507,6 +2518,142 @@ export default function App() {
        setOrders([{ ...RECIPES[0], id: Date.now(), timeLeft: RECIPES[0].timeLimit }]);
     }
   };
+
+  const startTutorial = () => {
+    startGame('ENDLESS'); // sandbox-ish rules: no delight penalties, no order decay
+    setTutorialActive(true);
+    setTutorialStepIndex(0);
+    tutorialMetaRef.current = { tossedOnce: false, servedOnce: false };
+  };
+
+  const tutorialSteps = useRef([
+    {
+      id: 'welcome',
+      targetId: null,
+      title: 'Welcome to Wok Star',
+      body: 'You’ll learn the basics in a few quick steps.\n\nGoal: cook the order, keep Burn low, build Wok Hei with tossing, then Serve for cash and score.',
+      hint: 'Use mouse/touch on controls. Keyboard: W/S = heat, D (hold) = add oil, A = reduce oil, Q = gift, E = serve, C (hold) = clean.',
+      gate: 'none',
+      autoAdvance: false,
+      nextLabel: 'Start',
+    },
+    {
+      id: 'heat',
+      targetId: 'heat',
+      title: 'Heat = speed (and risk)',
+      body: 'Turn up HEAT to cook faster.\n\nHigh heat fills Cook quickly, but also makes Burn rise if you stop tossing.',
+      hint: 'Drag the HEAT slider (or press W) until it’s ~75% or higher.',
+      gate: 'heat75',
+      autoAdvance: true,
+    },
+    {
+      id: 'oil',
+      targetId: 'oil-button',
+      title: 'Oil = control and tips',
+      body: 'Oil prevents “too dry” penalties and helps you build Wok Hei while tossing.\n\nToo much oil can be “too greasy” for some orders.',
+      hint: 'Hold the oil button (or hold D) to raise oil above ~30%.',
+      gate: 'oil30',
+      autoAdvance: true,
+    },
+    {
+      id: 'ingredients',
+      targetId: 'ingredients',
+      title: 'Add ingredients to the wok',
+      body: 'Click ingredients to add them.\n\nYou need the order’s required items before you can Serve.',
+      hint: 'Add at least 1 ingredient to continue.',
+      gate: 'hasFood',
+      autoAdvance: true,
+    },
+    {
+      id: 'toss',
+      targetId: 'toss',
+      title: 'Toss to manage Burn',
+      body: 'Tossing slows Burn and (at high heat + oil) builds Wok Hei.\n\nTo keep Wok Hei high, you must keep moving the toss control.',
+      hint: 'Drag the TOSS pad in circles for a second.',
+      gate: 'tossOnce',
+      autoAdvance: true,
+    },
+    {
+      id: 'cookburn',
+      targetId: 'cook-burn',
+      title: 'Cook vs Burn',
+      body: 'Serve when Cook is high and Burn is low.\n\nIf Burn hits 100%, your dish is ruined.',
+      hint: 'Keep tossing and wait until Cook reaches ~50%+.',
+      gate: 'cook50',
+      autoAdvance: true,
+    },
+    {
+      id: 'wokhei',
+      targetId: 'wok-hei',
+      title: 'Wok Hei = big multiplier',
+      body: 'Wok Hei is a powerful score/cash multiplier.\n\nBuild it by tossing at high heat with some oil.',
+      hint: 'Keep tossing until Wok Hei reaches ~25%+.',
+      gate: 'wokHei25',
+      autoAdvance: true,
+    },
+    {
+      id: 'order',
+      targetId: 'order',
+      title: 'Read the current order',
+      body: 'This panel shows what you still need to add.\n\nTry to match the order, then Serve when cooked.',
+      hint: 'Tip: you can tap tickets to reprioritize them.',
+      gate: 'none',
+      autoAdvance: false,
+    },
+    {
+      id: 'serve',
+      targetId: 'serve',
+      title: 'Serve to score',
+      body: 'Serving a matching cooked dish earns cash + score.\n\nPerfect serves and maintaining combo chains boost your results.',
+      hint: 'When ready, click SERVE (or press E).',
+      gate: 'servedOnce',
+      autoAdvance: true,
+    },
+    {
+      id: 'combo',
+      targetId: 'combo',
+      title: 'Combo = streak multiplier',
+      body: 'Serving repeatedly increases your Combo.\n\nHigher combo means more money per dish — but burning/trashing resets it.',
+      hint: 'Keep your streak alive: cook fast, toss often, and serve clean.',
+      gate: 'none',
+      autoAdvance: false,
+      nextLabel: 'Finish',
+    },
+  ]);
+
+  const activeTutorialStep = tutorialSteps.current[tutorialStepIndex] || tutorialSteps.current[0];
+
+  const isTutorialGateComplete = (gate) => {
+    if (!gate || gate === 'none') return true;
+    if (gate === 'heat75') return (tutorialSignals.heatLevel || 0) >= 75;
+    if (gate === 'oil30') return (tutorialSignals.oilLevel || 0) >= 30;
+    if (gate === 'hasFood') return (tutorialSignals.wokContentsCount || 0) > 0;
+    if (gate === 'tossOnce') return !!tutorialMetaRef.current.tossedOnce;
+    if (gate === 'cook50') return (tutorialSignals.cookProgress || 0) >= 50;
+    if (gate === 'wokHei25') return (tutorialSignals.wokHei || 0) >= 25;
+    if (gate === 'servedOnce') return !!tutorialMetaRef.current.servedOnce;
+    return true;
+  };
+
+  useEffect(() => {
+    if (!tutorialActive) return;
+    if (tutorialSignals.isTossing) tutorialMetaRef.current.tossedOnce = true;
+  }, [tutorialActive, tutorialSignals.isTossing]);
+
+  const lastAutoAdvanceRef = useRef({ stepIndex: -1 });
+  useEffect(() => {
+    if (!tutorialActive) return;
+    const step = activeTutorialStep;
+    if (!step?.autoAdvance) return;
+    if (!isTutorialGateComplete(step.gate)) return;
+    if (lastAutoAdvanceRef.current.stepIndex === tutorialStepIndex) return;
+    lastAutoAdvanceRef.current.stepIndex = tutorialStepIndex;
+    const t = setTimeout(() => {
+      setTutorialStepIndex(idx => Math.min(idx + 1, tutorialSteps.current.length - 1));
+    }, 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tutorialActive, tutorialSignals, combo, tutorialStepIndex]);
 
   const getChapterEncounters = (chapter, isProPath = false) => {
       const effectiveChapter = isProPath ? chapter : currentChapter;
@@ -2968,10 +3115,11 @@ export default function App() {
                 return newScore;
             });
             
-            if (newCombo >= 3 && combo < 3) triggerStreakPopup("HEATING UP! 🔥", "#f97316");
-            else if (newCombo >= 5 && combo < 5) triggerStreakPopup("WOK & ROLL! 🎸", "#eab308");
-            else if (newCombo >= 10 && combo < 10) triggerStreakPopup("SHAOLIN SPEED! 🥋", "#a855f7");
-            else if (newCombo >= 15 && combo < 15) triggerStreakPopup("SORROWFUL TEARS! 😭", "#3b82f6");
+            // TEMP: lowered combo thresholds for testing (was 3/5/10/15)
+            if (newCombo >= 2 && combo < 2) triggerStreakPopup("HEATING UP! 🔥", "#f97316");
+            else if (newCombo >= 3 && combo < 3) triggerStreakPopup("WOK & ROLL! 🎸", "#eab308");
+            else if (newCombo >= 5 && combo < 5) triggerStreakPopup("SHAOLIN SPEED! 🥋", "#a855f7");
+            else if (newCombo >= 8 && combo < 8) triggerStreakPopup("SORROWFUL TEARS! 😭", "#3b82f6");
             else if (newCombo >= 20 && newCombo % 5 === 0) triggerStreakPopup("SIK SAN! 🐉", "#ec4899");
 
             gameDataRef.current.serveTriggered = {
@@ -3145,8 +3293,20 @@ export default function App() {
               <span className="text-[9px] md:text-[10px] text-green-400/90 uppercase tracking-widest shrink-0">Cash</span>
               <span className={`font-mono font-bold text-sm md:text-lg tabular-nums animate-pop ${cash < 0 ? 'text-red-500' : 'text-green-400'}`} title="Cash">${Number(cash).toFixed(2)} {ownedUpgrades.includes('rolex') && '💎'}</span>
             </div>
-            {soul > 0 && <span key={`soul-${soul}`} className="text-cyan-400 font-bold flex items-center gap-1 border-l border-neutral-700 pl-2" title="Soul (goodwill): from GIFTing. Used in NPC encounters."><Heart size={14} fill="currentColor" /> {soul}</span>}
-            {combo > 1 && <span key={combo} className="text-xs md:text-sm text-orange-400 font-black border-l border-neutral-700 pl-2" title="Combo multiplier">x{combo}</span>}
+            <span className="text-neutral-600 shrink-0" aria-hidden="true">·</span>
+            <div className="flex items-center gap-1.5 md:gap-2" title="Soul (goodwill): from GIFTing. Used in NPC encounters.">
+              <span className="text-[9px] md:text-[10px] text-cyan-400/90 uppercase tracking-widest shrink-0">Soul</span>
+              <span className="font-mono font-bold text-sm md:text-lg tabular-nums text-cyan-300 animate-pop" title="Soul">{Math.round(Number(soul || 0))}</span>
+            </div>
+            <span
+              data-tutorial-id="combo"
+              key={combo}
+              className="text-xs md:text-sm text-orange-400 font-black border-l border-neutral-700 pl-2 tabular-nums"
+              title="Combo multiplier"
+              style={{ opacity: combo > 1 ? 1 : 0, width: combo > 1 ? 'auto' : 0, overflow: 'hidden' }}
+            >
+              x{combo}
+            </span>
           </div>
         </div>
 
@@ -3256,6 +3416,9 @@ export default function App() {
               </button>
               <button onClick={() => startGame('ENDLESS')} className="w-full py-3 flex items-center justify-center gap-2 bg-neutral-800 hover:bg-neutral-700 rounded-xl font-bold uppercase tracking-widest text-neutral-300 transition-transform active:scale-95">
                 <Play size={20} /> Endless Shift
+              </button>
+              <button onClick={startTutorial} className="w-full py-3 flex items-center justify-center gap-2 bg-cyan-900/70 hover:bg-cyan-800 rounded-xl font-bold uppercase tracking-widest text-cyan-100 transition-transform active:scale-95 border border-cyan-700/40">
+                <Crosshair size={20} /> Interactive Tutorial
               </button>
               <button onClick={() => { setGameState('RESTAURANT_HUB'); }} className="w-full py-3 flex items-center justify-center gap-2 bg-amber-900/80 hover:bg-amber-800 rounded-xl font-bold uppercase tracking-widest text-amber-200 transition-transform active:scale-95 border border-amber-700/50">
                 <ChefHat size={20} /> My Restaurant
@@ -3942,7 +4105,34 @@ export default function App() {
       {/* --- MAIN GAMEPLAY UI --- */}
       <main className="flex-1 flex flex-col relative min-h-0" style={{ backgroundColor: '#0a0a0a' }}>
         {gameState === 'PLAYING' ? (
-          <GameLoop currentChapter={currentChapter} score={score} cash={cash} setScore={setScore} setCash={setCash} delight={delight} setDelight={setDelight} onRecipeSaved={(recipe) => setCustomRecipes(prev => [...prev, recipe])} isSandbox={!isStoryMode} isRestaurantMode={isRestaurantMode} dailySpecialId={restaurantShiftConfig?.dailySpecialId} contracts={restaurantShiftConfig?.contracts} chapterTodos={getChapterTodos(currentChapter, storyPath === 'pro_kitchen')} combo={combo} setCombo={setCombo} onShiftEnd={isRestaurantMode ? (stats) => {
+          <GameLoop
+            currentChapter={currentChapter}
+            score={score}
+            cash={cash}
+            setScore={setScore}
+            setCash={setCash}
+            delight={delight}
+            setDelight={setDelight}
+            soul={soul}
+            setSoul={setSoul}
+            onRecipeSaved={(recipe) => setCustomRecipes(prev => [...prev, recipe])}
+            isSandbox={!isStoryMode}
+            isRestaurantMode={isRestaurantMode}
+            dailySpecialId={restaurantShiftConfig?.dailySpecialId}
+            contracts={restaurantShiftConfig?.contracts}
+            chapterTodos={getChapterTodos(currentChapter, storyPath === 'pro_kitchen')}
+            combo={combo}
+            setCombo={setCombo}
+            tutorialActive={tutorialActive}
+            onTutorialSignals={(sig) => {
+              if (!tutorialActive) return;
+              setTutorialSignals(prev => ({ ...prev, ...(sig || {}) }));
+            }}
+            onTutorialEvent={(evt) => {
+              if (!tutorialActive) return;
+              if (evt?.type === 'serve_success') tutorialMetaRef.current.servedOnce = true;
+            }}
+            onShiftEnd={isRestaurantMode ? (stats) => {
             const state = loadRestaurantState() || { xp: 0, daysOperated: 0, contractProgress: {}, completedToday: [], lastPlayedDate: new Date().toDateString() };
             const contracts = restaurantShiftConfig?.contracts || [];
             let addedXP = Math.floor((stats.score || 0) / 10);
@@ -3986,7 +4176,8 @@ export default function App() {
             setGameState('RESTAURANT_HUB');
             setIsRestaurantMode(false);
             setRestaurantShiftConfig(null);
-          } : undefined} />
+          } : undefined}
+          />
         ) : (
           <>
         <div className="absolute top-1/4 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-50 pointer-events-none flex flex-col items-center gap-2">
@@ -4311,6 +4502,31 @@ export default function App() {
           </>
         )}
       </main>
+
+      <TutorialOverlay
+        active={tutorialActive && gameState === 'PLAYING'}
+        step={tutorialStepIndex}
+        totalSteps={tutorialSteps.current.length}
+        targetId={activeTutorialStep?.targetId}
+        title={activeTutorialStep?.title}
+        body={activeTutorialStep?.body}
+        hint={activeTutorialStep?.hint}
+        canGoBack={tutorialStepIndex > 0}
+        canGoNext={isTutorialGateComplete(activeTutorialStep?.gate)}
+        primaryLabel={activeTutorialStep?.nextLabel || (tutorialStepIndex >= tutorialSteps.current.length - 1 ? 'Finish' : 'Next')}
+        onBack={() => setTutorialStepIndex(i => Math.max(0, i - 1))}
+        onSkip={() => setTutorialStepIndex(i => Math.min(tutorialSteps.current.length - 1, i + 1))}
+        onNext={() => {
+          const isLast = tutorialStepIndex >= tutorialSteps.current.length - 1;
+          if (isLast) {
+            try { localStorage.setItem('wokstar_tutorial_done', '1'); } catch {}
+            setTutorialActive(false);
+            return;
+          }
+          setTutorialStepIndex(i => Math.min(tutorialSteps.current.length - 1, i + 1));
+        }}
+        onExit={() => setTutorialActive(false)}
+      />
     </div>
   );
 }
